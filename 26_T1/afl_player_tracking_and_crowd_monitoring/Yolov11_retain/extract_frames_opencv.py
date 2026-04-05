@@ -4,8 +4,8 @@ import cv2
 # =========================
 # Config
 # =========================
-VIDEO_PATH = "/Users/ethan/Desktop/Applied_AI/2026_T1/SIT764/redback-orion/Player_Tracking/Yolov11_retain/data/video/GoldCoast_Carlton_VFL.mp4"
-OUTPUT_DIR = "/Users/ethan/Desktop/Applied_AI/2026_T1/SIT764/redback-orion/Player_Tracking/Yolov11_retain/data/frames"
+VIDEO_PATH = "data/video/GoldCoast_Carlton_VFL.mp4"
+OUTPUT_DIR = "data/frames"
 
 TARGET_FPS = 5  # Save 5 frames per second
 

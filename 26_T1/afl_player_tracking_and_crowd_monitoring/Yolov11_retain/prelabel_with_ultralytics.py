@@ -7,8 +7,8 @@ from ultralytics import YOLO
 # =========================================================
 # Config
 # =========================================================
-IMAGE_DIR = Path("/Users/ethan/Desktop/Applied_AI/2026_T1/SIT764/redback-orion/Player_Tracking/Yolov11_retain/data/frames")
-LABEL_DIR = Path("/Users/ethan/Desktop/Applied_AI/2026_T1/SIT764/redback-orion/Player_Tracking/Yolov11_retain/data/labels")
+IMAGE_DIR = Path("data/frames")
+LABEL_DIR = Path("data/labels")
 
 MODEL_NAME = "yolo11x.pt"   # More stable for person detection; will auto-download on first run
 IMG_SIZE = 1280

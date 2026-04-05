@@ -5,8 +5,8 @@ from typing import List, Tuple
 # =========================
 # Config
 # =========================
-IMAGE_DIR = "/Users/ethan/Desktop/Applied_AI/2026_T1/SIT764/redback-orion/Player_Tracking/Yolov11_retain/data/frames"
-LABEL_DIR = "/Users/ethan/Desktop/Applied_AI/2026_T1/SIT764/redback-orion/Player_Tracking/Yolov11_retain/data/labels"
+IMAGE_DIR = "data/frames"
+LABEL_DIR = "data/labels"
 
 CLASS_NAMES = {
     0: "CAR",
