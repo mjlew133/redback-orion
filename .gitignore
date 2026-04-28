@@ -26,3 +26,6 @@ runs/
 *.pt
 *.pth
 *.zip
+*.mp4
+*.json
+*.csv
