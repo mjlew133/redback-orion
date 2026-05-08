@@ -34,3 +34,5 @@ runs/
 *.mp4
 *.json
 *.csv
+/Player_Tracking/Pose_Matching_project/Pose_Estimation/pose-estimation-fitness/src/models/FitnessTracking.v1i.yolov5pytorch/test/images
+/Player_Tracking/Pose_Matching_project/Pose_Estimation/pose-estimation-fitness/src/models/FitnessTracking.v1i.yolov5pytorch
