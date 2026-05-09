@@ -36,3 +36,15 @@ runs/
 *.csv
 /Player_Tracking/Pose_Matching_project/Pose_Estimation/pose-estimation-fitness/src/models/FitnessTracking.v1i.yolov5pytorch/test/images
 /Player_Tracking/Pose_Matching_project/Pose_Estimation/pose-estimation-fitness/src/models/FitnessTracking.v1i.yolov5pytorch
+obj/
+bin/
+*.mp4
+*.mov
+*.pt
+.DS_Store
+*.mov
+*.mp4
+*.pt
+obj/
+bin/
+.DS_Store
