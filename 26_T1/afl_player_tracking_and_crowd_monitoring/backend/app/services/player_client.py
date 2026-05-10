@@ -1,5 +1,6 @@
 import httpx
-from app.config import USE_MOCK_PLAYER, PLAYER_SERVICE_URL
+from fastapi import HTTPException, UploadFile
+from app.config import USE_MOCK_SERVICES, PLAYER_SERVICE_URL
 
 
 def get_mock_player_data():
@@ -26,14 +27,36 @@ def get_mock_player_data():
     }
 
 
-async def get_player_data(file_path: str = None):
-    if USE_MOCK_PLAYER:
+async def get_player_data(file: UploadFile = None):
+    if USE_MOCK_SERVICES:
         return get_mock_player_data()
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{PLAYER_SERVICE_URL}/analyze",
-            data={"file_path": file_path}
-        )
+    if file is None:
+        raise HTTPException(status_code=400, detail="Missing video file")
+
+    try:
+        contents = await file.read()
+
+        files = {
+            "file": (file.filename, contents, file.content_type)
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{PLAYER_SERVICE_URL}/tracking",
+                files=files
+            )
+
         response.raise_for_status()
         return response.json()
+
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=f"Player tracking service error: {exc.response.text}"
+        )
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not connect to player tracking service"
+        )
