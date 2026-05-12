@@ -469,20 +469,6 @@ The rendered video includes:
 
 ---
 
-# Recommended Folder Structure
-
-```text
-formation_analysis/
-│
-├── formation_visualizer.py
-├── afl_video.mp4
-├── clustered_tracking.json
-├── outputs/
-└── README.md
-```
-
----
-
 # Backend Integration Notes
 
 Backend systems should:
@@ -567,9 +553,6 @@ Potential future upgrades:
 - temporal edge smoothing
 - Voronoi territorial control maps
 - passing probability estimation
-- formation classification
-- field homography calibration
-- player velocity vector integration
 
 ---
 
