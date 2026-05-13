@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PLAYER_SERVICE_URL = os.getenv("PLAYER_SERVICE_URL", "http://localhost:8001")
+PLAYER_SERVICE_URL = os.getenv("PLAYER_SERVICE_URL", "http://localhost:8080")
 CROWD_SERVICE_URL = os.getenv("CROWD_SERVICE_URL", "http://localhost:8002")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", 8000))
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")

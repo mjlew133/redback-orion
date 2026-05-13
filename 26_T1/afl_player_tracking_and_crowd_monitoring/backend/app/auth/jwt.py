@@ -24,7 +24,8 @@ def create_refresh_token(data: dict):
 
     token = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
-    return token, expires_at
+    # Strip timezone before storing — DB column is TIMESTAMP WITHOUT TIME ZONE
+    return token, expires_at.replace(tzinfo=None)
 
 def decode_refresh_token(token: str) -> dict:
     try:
