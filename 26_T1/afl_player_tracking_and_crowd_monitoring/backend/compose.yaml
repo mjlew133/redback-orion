@@ -16,6 +16,10 @@ services:
       - "8000:8000"
     env_file:
       - .env.docker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://user:password@db:5432/orion_db
+    depends_on:
+      - db
 
   frontend:
     build:
@@ -39,6 +43,19 @@ services:
       - "8002:8002"
     restart: unless-stopped
 
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: orion_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
 
 # The commented out section below is an example of how to define a PostgreSQL
 # database that your application can use. `depends_on` tells Docker Compose to
