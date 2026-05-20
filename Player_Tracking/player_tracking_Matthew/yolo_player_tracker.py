@@ -79,13 +79,14 @@ def colour_ratio(hsv, lower, upper):
 
     return cv2.countNonZero(mask) / area
 
+# Detect umpires first, then classify remaining players into teams based on colour features and KMeans clustering
 def is_umpire(features):
     if features is None:
         return False
 
     median_h, median_s, median_v, red_ratio, yellow_ratio, blue_ratio, white_ratio, dark_ratio = features
 
-    # Temporary loose umpire rule
+    # Umpire detection rule
     return (
         yellow_ratio > 0.25 and
         median_s > 40 and
@@ -146,6 +147,7 @@ def extract_colour_features(frame, x1, y1, x2, y2):
         np.array([180, 255, 80])
     )
 
+    # Collect features for both umpire detection and team classification
     features = np.array([
         median_h,
         median_s,
@@ -177,7 +179,7 @@ def classify_team(features):
     ):
         return "Umpire"
 
-    # Then classify only non-umpires into teams
+    # Then classify other players into teams
     if not clustering_ready or kmeans_model is None or scaler is None:
         return "Learning"
 
