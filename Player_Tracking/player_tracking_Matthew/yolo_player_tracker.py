@@ -432,15 +432,22 @@ while True:
                 2
             )
 
-            label = f"{team_label} ID:{track_id} | {speed_kmh:.1f} km/h | Y:{features[4]:.2f}"
+            label = f"{team_label} ID:{track_id} | {speed_kmh:.1f} km/h | Acc:{acceleration:.1f} | Y:{features[4]:.2f}"
 
             label_x = int(x1)
             label_y = max(25, int(y1) - 10)
 
+            (text_width, text_height), _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                2
+            )
+
             cv2.rectangle(
                 annotated_frame,
-                (label_x, label_y - 18),
-                (label_x + 250, label_y + 5),
+                (label_x, label_y - text_height - 8),
+                (label_x + text_width + 10, label_y + 5),
                 label_bg_colour,
                 -1
             )
