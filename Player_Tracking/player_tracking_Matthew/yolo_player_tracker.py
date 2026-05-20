@@ -432,7 +432,7 @@ while True:
                 2
             )
 
-            label = f"{team_label} ID:{track_id} | {speed_kmh:.1f} km/h | Acc:{acceleration:.1f} | Y:{features[4]:.2f}"
+            label = f"{team_label} ID:{track_id} | {speed_kmh:.1f} km/h | Accel:{acceleration:.1f} | YR:{features[4]:.2f}"
 
             label_x = int(x1)
             label_y = max(25, int(y1) - 10)
