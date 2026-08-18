@@ -5,6 +5,7 @@ import numpy as np                     # Used for creating the "canvas" for lett
 from concurrent.futures import ThreadPoolExecutor # For background file saving
 # Import utils
 from video_processing.utils import get_video_stats, check_blur, save_frame_worker
+from video_processing.tiling import generate_tiles
 
 #Logic to find the config relative to the Project Root
 #By doing this, the code works on any computer because it doesn't care about the folders above the project(our project is at 2026_T1 folder level)
@@ -21,6 +22,124 @@ def load_config():
     with open(CONFIG_PATH, 'r') as f:
         return json.load(f)
 
+def runtime_preprocessing(frame, config):
+    """
+    Runtime preprocessing stage for the T2 pipeline.
+
+    Current implementation:
+        - Configurable tiling.
+
+    Future additions:
+        - Use video-level quality thresholds
+          calculated during video analysis.
+        - Conditional CLAHE.
+        - Configurable tile overlap.
+        - Optional letterboxing.
+
+    The frame is currently returned unchanged unless
+    tiling is enabled.
+    """
+
+    # --------------------------------------------------------
+    # FUTURE T2: QUALITY-BASED PREPROCESSING
+    # --------------------------------------------------------
+    #
+    # Video-level quality statistics will be calculated
+    # during the initial video analysis stage.
+    #
+    # For example:
+    #
+    #     blur threshold
+    #     contrast threshold
+    #     brightness threshold
+    #     sharpness threshold
+    #
+    # The current frame can later be compared against
+    # these thresholds here to determine whether
+    # preprocessing such as CLAHE is required.
+    #
+    # --------------------------------------------------------
+
+
+    # For now, keep the original frame unchanged.
+    processed_frame = frame
+
+
+    # --------------------------------------------------------
+    # CURRENT: CONFIGURABLE TILING
+    # --------------------------------------------------------
+
+    tiling_enabled = config.get(
+        "enable_tiling",
+        False
+    )
+
+
+    tiles = []
+    tile_metadata = []
+
+
+    if tiling_enabled:
+
+        tile_rows = config.get(
+            "tile_rows",
+            2
+        )
+
+        tile_columns = config.get(
+            "tile_columns",
+            2
+        )
+
+
+        # ----------------------------------------------------
+        # FUTURE T2: TILE OVERLAP
+        # ----------------------------------------------------
+        #
+        # Later we will read something such as:
+        #
+        # tile_overlap = config.get(
+        #     "tile_overlap",
+        #     0
+        # )
+        #
+        # and pass it to generate_tiles().
+        #
+        # Current tiling is non-overlapping.
+        #
+        # ----------------------------------------------------
+
+        tiles, tile_metadata = generate_tiles(
+            processed_frame,
+            rows=tile_rows,
+            cols=tile_columns
+        )
+
+
+    # --------------------------------------------------------
+    # FUTURE T2: LETTERBOXING
+    # --------------------------------------------------------
+    #
+    # Later:
+    #
+    # if config.get("enable_letterbox", False):
+    #     ...
+    #
+    # Letterboxing will prepare the frame/tile for the
+    # downstream detection model while preserving aspect ratio.
+    #
+    # The target size should come from the detector's
+    # input requirements.
+    #
+    # --------------------------------------------------------
+
+
+    return (
+        processed_frame,
+        tiles,
+        tile_metadata
+    )
+
 def process_video(video_id: str, video_path: str):
     """
     video_path: Expected as 'data/raw/filename.mp4' (relative to Root (2026_T1))
@@ -31,16 +150,48 @@ def process_video(video_id: str, video_path: str):
     #contains path where input video is present
     full_input_path = os.path.normpath(os.path.join(BASE_DIR, video_path))
     
+    # Existing video quality analysis.
+    #
+    # CURRENT:
+    #   Calculates the dynamic blur threshold.
+    #
+    # FUTURE T2:
+    #   Extend this analysis stage to also calculate
+    #   video-level contrast, brightness and sharpness
+    #   statistics and derive their thresholds.
+    #
+    # This keeps all video-level quality analysis
+    # in one place rather than creating a separate
+    # quality-analysis pass.
+
     # Establish the 'Sharpness Floor' for this specific crowd footage
     print(f"Analyzing crowd video quality for {video_id}...")
     # If variance is less then threshold blurry image else sharp image
     dynamic_threshold = get_video_stats(full_input_path, config["sample_rate"])
     print(f"Calculated Crowd Quality Threshold: {dynamic_threshold:.2f}")
+
     
+    # ------------------------------------------------------------
+    # Frame and Tile Paths
+    # ------------------------------------------------------------
     #contains path where output frames will be stored
     output_dir = os.path.join(BASE_DIR, config["extracted_frames_dir"])
     #It creates folder where output frames will be stored if only folder is already not created
     os.makedirs(output_dir, exist_ok=True)
+
+    #Contains path where generated tiles will be stored.
+    tiled_output_dir = os.path.join(
+                        BASE_DIR,
+                        "video_processing",
+                        "data",
+                        "tiled_frames"
+                    )
+    os.makedirs(
+                        tiled_output_dir,
+                        exist_ok=True
+                    )
+
+    
     
     #opens video stream
     cap = cv2.VideoCapture(full_input_path)
@@ -81,20 +232,94 @@ def process_video(video_id: str, video_path: str):
                     search_count += 1
                     score, is_sharp = check_blur(frame, dynamic_threshold)
                 
-                
+                # ------------------------------------------------------------
+                # T2 RUNTIME PREPROCESSING
+                # ------------------------------------------------------------
+                #
+                # Current:
+                #   - Tiling
+                #
+                # Future:
+                #   - Compare current-frame quality against
+                #     video-level thresholds.
+                #   - Conditional CLAHE.
+                #   - Tile overlap.
+                #   - Letterboxing.
+                #
+                processed_frame, tiles, tile_metadata = runtime_preprocessing(
+                    frame,
+                    config
+                )
+
                 #frame naming for maintaining frame order
                 fname = f"frame_{extracted_count:04d}.jpg"
                 save_path = os.path.join(output_dir, fname)
                 
-                save_futures.append(executor.submit(save_frame_worker, save_path, frame))
+                save_futures.append(executor.submit(save_frame_worker, save_path, processed_frame))
+
+               
+                # ------------------------------------------------------------
+                # CURRENT T2: SAVE TILES
+                # ------------------------------------------------------------
+
+                if config.get(
+                    "enable_tiling",
+                    False
+                ):
+
+                    for tile_index, tile in enumerate(
+                        tiles
+                    ):
+
+                        tile_filename = (
+                            f"frame_"
+                            f"{extracted_count:04d}_"
+                            f"tile_"
+                            f"{tile_index + 1}.jpg"
+                        )
+
+
+                        tile_path = os.path.join(
+                            tiled_output_dir,
+                            tile_filename
+                        )
+
+
+                        # Use the existing background saving worker
+                        # for tiles as well as normal frames.
+
+                        save_futures.append(
+                            executor.submit(
+                                save_frame_worker,
+                                tile_path,
+                                tile
+                            )
+                        )
+
+
+                        # Add the tile's output path to its metadata.
+
+                        tile_metadata[tile_index]["tile_path"] = (
+                            f"video_processing/data/"
+                            f"tiled_frames/"
+                            f"{tile_filename}"
+                        )
+
+
 
                 #Match the 'DetectionFrame' schema in shared/models.py
                 frames_metadata.append({
                     "frame_id": extracted_count,
                     #this will tell us at what time the frame is present in video
                     "timestamp": round(count / fps, 2),
-                    "frame_path": f"{config['extracted_frames_dir']}/{fname}"
+                    "frame_path": f"{config['extracted_frames_dir']}/{fname}",
+                    # Attach tile metadata to this frame.
+                    # If tiling is disabled, this will simply be an empty list.
+                    "tiles": tile_metadata
                 })
+                    
+
+
                 extracted_count += 1
             count += 1
     finally:
@@ -117,17 +342,11 @@ if __name__ == "__main__":
     #Run this from the Project Root (2026_T1)
     #python -m video_processing.main
     test_res = process_video("match_01", "data/raw/match_01.mp4")
-    print(f"Successfully processed {len(test_res['frames'])} frames.")
+    if "error" in test_res:
+        print(test_res["error"])
 
-
-#Things to improve
-#1. Multi threaded frame processing, to save images in the background while the main loop keeps reading the video
-#2. Batch Processing multiple videos
-#3. Dynamic Sampling rate change if the Person Count is very high to get more details and decrease it when area is empty to save space
-
-#Edge Cases to look for in future
-#1. Aspect Ratio Distortion: When you resize to 640x640, a wide AFL field might look "squashed. "Fix: Use Letterboxing (adding black bars) to keep the original shape while still hitting the 640x640 target.
-#2. Motion Blur. The Fix: Ensure you are extracting Keyframes (I-frames) where possible, as these contain the most complete visual data.
-#3. Overcompression The Fix: Always save frames with high JPEG quality (90-95). Code: cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-#4. Poor Normalization (Lighting/Contrast) The Fix: In the future, you can add Histogram Equalization to your processing flow to balance the lighting before the AI sees it.
-#5. For person far away. The Fix: If the team needs to detect people in the far distance, you might need to implement Tiling (chopping the 4K frame into four 640x640 blocks) instead of shrinking the whole thing.
+    else:
+        print(
+            f"Successfully processed "
+            f"{len(test_res['frames'])} frames."
+        )
