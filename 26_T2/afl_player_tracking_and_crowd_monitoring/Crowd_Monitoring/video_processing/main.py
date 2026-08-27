@@ -28,12 +28,12 @@ def runtime_preprocessing(frame, config):
 
     Current implementation:
         - Configurable tiling.
+        - Configurable tile overlap.
 
     Future additions:
         - Use video-level quality thresholds
           calculated during video analysis.
         - Conditional CLAHE.
-        - Configurable tile overlap.
         - Optional letterboxing.
 
     The frame is currently returned unchanged unless
@@ -91,28 +91,33 @@ def runtime_preprocessing(frame, config):
             2
         )
 
-
         # ----------------------------------------------------
-        # FUTURE T2: TILE OVERLAP
+        # CURRENT T2: CONFIGURABLE TILE OVERLAP
         # ----------------------------------------------------
         #
-        # Later we will read something such as:
+        # The overlap value is read from the configuration.
         #
-        # tile_overlap = config.get(
-        #     "tile_overlap",
-        #     0
-        # )
+        # Example:
         #
-        # and pass it to generate_tiles().
+        # tile_overlap = 0.10
         #
-        # Current tiling is non-overlapping.
+        # means neighbouring tiles overlap by approximately
+        # 10% of their tile dimensions.
         #
+        # generate_tiles() dynamically calculates the tile
+        # dimensions and positions so that the complete
+        # frame is covered without gaps.
         # ----------------------------------------------------
+        tile_overlap = config.get(
+            "tile_overlap",
+            0.0
+        )
 
         tiles, tile_metadata = generate_tiles(
             processed_frame,
             rows=tile_rows,
-            cols=tile_columns
+            cols=tile_columns,
+            overlap=tile_overlap
         )
 
 
@@ -237,13 +242,13 @@ def process_video(video_id: str, video_path: str):
                 # ------------------------------------------------------------
                 #
                 # Current:
-                #   - Tiling
+                #   - Configurable tiling.
+                #   - Configurable tile overlap.
                 #
                 # Future:
                 #   - Compare current-frame quality against
                 #     video-level thresholds.
                 #   - Conditional CLAHE.
-                #   - Tile overlap.
                 #   - Letterboxing.
                 #
                 processed_frame, tiles, tile_metadata = runtime_preprocessing(
@@ -339,9 +344,28 @@ def process_video(video_id: str, video_path: str):
     }
 
 if __name__ == "__main__":
-    #Run this from the Project Root (2026_T1)
-    #python -m video_processing.main
-    test_res = process_video("match_01", "data/raw/match_01.mp4")
+    # Run the integrated video-processing pipeline.
+    #
+    # Tiling configuration is now read from:
+    #
+    # shared/config/video_processing_config.json
+    #
+    # Example:
+    #
+    # "enable_tiling": true
+    # "tile_rows": 3
+    # "tile_columns": 3
+    # "tile_overlap": 0.10
+    #
+    # Therefore, the test below verifies that the complete
+    # pipeline correctly reads the configuration and passes
+    # the tiling settings to generate_tiles().
+
+    test_res = process_video(
+        "match_01",
+        "data/raw/match_01.mp4"
+    )
+
     if "error" in test_res:
         print(test_res["error"])
 
