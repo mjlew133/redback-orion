@@ -1,6 +1,6 @@
-# benchmark_models.py
+# Crowd-detection benchmark tools
 
-Comparison harness for crowd-detection weights. It runs several YOLO models over
+Comparison tool for crowd-detection weights. It runs several YOLO models over
 the same footage under controlled conditions and reports speed, per-frame counts
 and, when hand-labelled frames are supplied, accuracy.
 
@@ -9,16 +9,22 @@ about preventing the two failure modes that make detection benchmarks lie:
 counting a different class in each column, and treating a raw box count as if it
 were a crowd size.
 
+It was a single `benchmark_models.py` script; it is now a small package. `main.py`
+is the entry point and everything is run from inside the `benchmarking/`
+directory.
+
 ## Contents
 
 - [Requirements](#requirements)
-- [Where the file must live](#where-the-file-must-live)
+- [Layout](#layout)
+- [Modules](#modules)
 - [Setup](#setup)
 - [Modes](#modes)
 - [Configuration](#configuration)
 - [Ground truth](#ground-truth)
 - [Tiled inference](#tiled-inference)
 - [Reading the output](#reading-the-output)
+- [Results files](#results-files)
 - [Caveats](#caveats)
 - [Troubleshooting](#troubleshooting)
 
@@ -29,60 +35,87 @@ were a crowd size.
 - A GPU is optional. On CPU the tiled path is slow enough that you will want to
   drop `--frames` well below the default.
 
-## Where the file must live
+## Layout
 
-`REPO_ROOT` is derived as `Path(__file__).resolve().parents[4]`, so the script
-expects to sit at:
+Paths are resolved relative to the package directory
+(`SCRIPT_DIR = Path(__file__).resolve().parent` in `config.py`), so there is no
+depth-sensitive `parents[N]` index to keep in sync any more. The package expects
+to sit next to `crowd_detection/`:
 
 ```
-redback-orion/
-  26_T1/afl_player_tracking_and_crowd_monitoring/Crowd_Monitoring/2026_T1/crowd_detection/
-      yolov8n_crowdhuman.pt
-  26_T2/afl_player_tracking_and_crowd_monitoring/Crowd_Monitoring/
-      benchmarking/
-          new_test.mp4
-      crowd_detection/
-          benchmark_models.py   <- here
+Crowd_Monitoring/
+  crowd_detection/
+      yolov8n_crowdhuman.pt      <- 26T1 baseline weight, referenced in place
+  benchmarking/
+      main.py                    <- entry point
+      config.py core.py measure.py scoring.py tiling.py inspection.py
+      extract_truth_frames.py
+      videos/
+          side.mp4               <- committed sample clip
+      results/                   <- timestamped run outputs land here
+      yolo11n.pt yolo26n.pt      <- stock COCO weights (auto-downloaded if absent)
 ```
 
-Moving the file to a different depth silently breaks both the T1 model path and
-the video directory. If you relocate it, fix the `parents[4]` index.
+The `crowd_detection/yolov8n_crowdhuman.pt` weight is referenced in place rather
+than copied, to avoid duplicating a binary. If you move `benchmarking/` so it is
+no longer a sibling of `crowd_detection/`, fix `MODEL_CROWDHUMAN` in `config.py`.
 
-The 26_T1 baseline weight is referenced in place rather than copied, to avoid
-duplicating a ~19MB binary into 26_T2.
+## Modules
+
+| Module | Responsibility |
+| --- | --- |
+| `main.py` | Argument parsing and mode dispatch. |
+| `config.py` | All constants: `MODELS`, `VIDEO_PATHS`, thresholds, tile geometry, `MODEL_CLASS_OVERRIDES`. Edit this to add a model or clip. |
+| `core.py` | Model loading, class-by-name resolution, frame reading, single-frame counting. |
+| `measure.py` | The benchmark and sweep loops. |
+| `scoring.py` | Ground-truth loading, MAE/RMSE, writing result JSON to `results/`. |
+| `tiling.py` | Tile grid and full-resolution tiled inference with cross-tile NMS. |
+| `inspection.py` | `--diagnose` and `--show`. |
+| `extract_truth_frames.py` | Standalone helper: dumps a handful of frames to `truth_frames/` for hand-labelling. |
 
 ## Setup
 
 `side.mp4` is committed under `benchmarking/videos/` and already wired up as a
 sample clip. To benchmark against other footage, add clips there and point
-`VIDEO_PATHS` at them:
+`VIDEO_PATHS` (in `config.py`) at them:
 
 ```python
 VIDEO_PATHS = [
-    _VIDEO_DIR / "new_test.mp4",
-    _VIDEO_DIR / "side.mp4",
+    SCRIPT_DIR / "videos" / "side.mp4",
+    SCRIPT_DIR / "videos" / "new_test.mp4",
 ]
 ```
 
 Each clip is benchmarked separately. Metrics stay per-clip and ground-truth frame
 indices never collide across clips.
 
-Models are declared in the `MODELS` dict. Values are either a filesystem path
-(validated up front, so a missing weight fails clearly) or a bare Ultralytics
-name (resolved and downloaded on first load).
+Models are declared in the `MODELS` dict in `config.py`. Values are either a
+filesystem path (validated up front, so a missing weight fails clearly) or a bare
+Ultralytics name (resolved and downloaded on first load). The current set:
+
+```python
+MODELS = {
+    "26T1 (v8 crowdhuman)": MODEL_CROWDHUMAN,   # local path
+    "yolo26n (stock coco)": "yolo26n.pt",       # bare name
+    "yolo11n (stock coco)": "yolo11n.pt",       # bare name
+}
+```
+
+The keys are the labels you pass to `--diagnose` and `--show`.
 
 ## Modes
 
 Modes are mutually exclusive and resolved in this order: `--diagnose`, then
 `--sweep`, then `--show`, then the default benchmark. Passing more than one means
-only the first takes effect.
+only the first takes effect. Run everything from the `benchmarking/` directory.
 
 ### Default: benchmark
 
 ```bash
-python benchmark_models.py
-python benchmark_models.py --frames 100 --truth truth.json
-python benchmark_models.py --compare-tiling --truth truth.json
+python main.py
+python main.py --frames 100 --truth truth.json
+python main.py --compare-tiling --truth truth.json
+python main.py --no-save            # print only, don't write results/
 ```
 
 Runs every model against every video and prints one result dict per run. A
@@ -90,17 +123,21 @@ warm-up pass on the same code path precedes timing, so setup overhead is not
 counted. Failures are caught per run, so one missing weight does not sink the
 batch; skipped runs are summarised at the end.
 
+Unless `--no-save` is passed, the run is also written to
+`results/benchmark-<timestamp>.json` along with the settings that produced it.
+See [Results files](#results-files).
+
 `--compare-tiling` runs each model both tiled and untiled. That is the only valid
 tiling comparison: same model, same clip, one variable changed.
 
 ### `--sweep`
 
 ```bash
-python benchmark_models.py --sweep --frames 20
+python main.py --sweep --frames 20
 ```
 
 Prints average per-frame count for every model at confidence 0.05, 0.10, 0.20,
-0.35 and 0.50, followed by a stability figure per model.
+0.35 and 0.50 (`SWEEP_THRESHOLDS`), followed by a stability figure per model.
 
 This is the mode that exposes confidence calibration. A stock COCO model may only
 detect crowd members at low confidence, so its count collapses toward zero at a
@@ -112,17 +149,18 @@ Stability is `max - min` average count across the thresholds. Lower is better.
 It is internal to each model's own series, so it stays valid even when two
 columns are counting different classes.
 
-Sweep ignores `--conf` and `--truth`. It honours `--frames` and `--tiled`.
+Sweep ignores `--conf` and `--truth`, and writes nothing to disk. It honours
+`--frames` and `--tiled`.
 
 ### `--diagnose LABEL`
 
 ```bash
-python benchmark_models.py --diagnose "yolo26m (crowdpeoplefaces)"
+python main.py --diagnose "26T1 (v8 crowdhuman)"
 ```
 
-Inspects one model: its class map, training `imgsz`, device, resolved target
-class, tile count for the frame size, and what it detects on the first frame of
-each clip at conf 0.35, 0.10 and 0.01.
+`LABEL` must be a key of `MODELS`. Inspects one model: its class map, training
+`imgsz`, device, resolved target class, tile count for the frame size, and what
+it detects on the first frame of each clip at conf 0.35, 0.10 and 0.01.
 
 Two things make this the first stop for a zero-count result:
 
@@ -141,13 +179,13 @@ counts the wrong thing without ever raising.
 ### `--show LABEL`
 
 ```bash
-python benchmark_models.py --show "26T1 (v8 crowdhuman)" --conf 0.10
-python benchmark_models.py --show "26T1 (v8 crowdhuman)" --tiled --save
+python main.py --show "26T1 (v8 crowdhuman)" --conf 0.10
+python main.py --show "26T1 (v8 crowdhuman)" --tiled --save
 ```
 
-Plays each clip with detections drawn and a header showing model, clip, counted
-class and threshold. Press `q` to quit; that ends playback of the remaining clips
-too.
+`LABEL` must be a key of `MODELS`. Plays each clip with detections drawn and a
+header showing model, clip, counted class and threshold. Press `q` to quit; that
+ends playback of the remaining clips too.
 
 `--save` also writes `annotated_<model>_<clip>[_tiled].mp4` at full resolution.
 `--show-scale` only affects the on-screen window, never inference or the saved
@@ -162,12 +200,16 @@ clustering along tile seams or objects double-boxed in the overlap regions.
 
 ## Configuration
 
+All of these live in `config.py`.
+
 | Constant | Default | Notes |
 | --- | --- | --- |
 | `DEFAULT_CONF` | `0.35` | Overridable with `--conf` |
 | `DEFAULT_IOU` | `0.30` | Not exposed on the CLI, edit the constant |
 | `DEFAULT_N_FRAMES` | `50` | Overridable with `--frames` |
 | `DEFAULT_MAX_DET` | `5000` | See below |
+| `SWEEP_THRESHOLDS` | `(0.05, 0.10, 0.20, 0.35, 0.50)` | Confidence points for `--sweep` |
+| `GROUND_TRUTH_PATH` | `None` | Default for `--truth` when the flag is omitted |
 | `TILE_SIZE` | `640` | Should match the model's `imgsz` |
 | `TILE_OVERLAP` | `192` | Must exceed the largest object being counted |
 | `TILE_BATCH` | `8` | Tiles per forward pass |
@@ -189,10 +231,11 @@ face models all work. Order of resolution:
 
 Overrides exist because some weights ship without real class names. Ultralytics
 falls back to stringified indices (`{0: '0', 1: '1'}`) when the training YAML had
-no `names:` list, and name lookup cannot work against that. The current
-`yolo26m (crowdpeoplefaces)` override maps class 1 to `head`, confirmed by median
-box height: 46px vs 7px on `new_test.mp4` (about 1:6.6) and 554px vs 108px on
-`side.mp4` (about 1:5.1). Both sit in head territory rather than face.
+no `names:` list, and name lookup cannot work against that. The `config.py`
+example override maps class 1 of a `yolo26m (crowdpeoplefaces)` weight to `head`,
+confirmed by median box height: about 1:6.6 on `new_test.mp4` and 1:5.1 on
+`side.mp4`, both in head territory rather than face. That weight is not in the
+current `MODELS` set; the entry is kept as a worked example of how to add one.
 
 Every result row carries `counted_class`, because a person count and a head count
 are not the same quantity.
@@ -203,13 +246,22 @@ Without `--truth`, the script prints a notice and `avg_count` is a box count, no
 accuracy. Supply hand-labelled frames to get MAE and RMSE, the standard
 crowd-counting metrics.
 
-Format is keyed per clip by filename stem, so frame 5 in clip A and frame 5 in
-clip B do not overwrite each other:
+`extract_truth_frames.py` is the helper for producing those labels. It writes a
+handful of frames (`FRAMES = [0, 10, 20, 30, 40]` by default) from one clip into
+`truth_frames/` as JPEGs:
+
+```bash
+python extract_truth_frames.py
+```
+
+Hand-count each image, then record the counts in a JSON file keyed per clip by
+filename stem, so frame 5 in clip A and frame 5 in clip B do not overwrite each
+other:
 
 ```json
 {
-  "new_test": { "0": 42, "1": 43, "17": 40 },
-  "side":     { "0": 118, "9": 121 }
+  "side":     { "0": 118, "10": 121, "20": 117 },
+  "new_test": { "0": 42, "10": 43, "17": 40 }
 }
 ```
 
@@ -217,6 +269,9 @@ Keys are strings in the file and normalised on load: outer keys stay strings,
 inner keys become ints. Scoring covers only the labelled frames present within
 the range actually read, so labelling frame 200 while running `--frames 50` does
 nothing. Clips with no entry are reported as counts only.
+
+Point the run at the file with `--truth path/to/truth.json`, or set
+`GROUND_TRUTH_PATH` in `config.py` so it is picked up without the flag.
 
 ## Tiled inference
 
@@ -244,10 +299,11 @@ Cost scales with tile count. Drop `--frames` accordingly.
 Benchmark rows look like:
 
 ```python
-{'label': '26T1 (v8 crowdhuman)', 'video': 'new_test.mp4',
+{'label': '26T1 (v8 crowdhuman)', 'video': 'side.mp4',
  'model': 'yolov8n_crowdhuman.pt', 'counted_class': 'person', 'tiled': False,
- 'model_size_mb': 6.2, 'frames_tested': 50, 'avg_latency_ms': 41.7,
- 'fps': 23.98, 'avg_count': 16.4, 'mae': 2.1, 'rmse': 2.8, 'n_labelled': 10}
+ 'device': 'cpu', 'model_size_mb': 6.2, 'frames_tested': 50,
+ 'avg_latency_ms': 25.85, 'fps': 38.69, 'avg_count': 21.9,
+ 'mae': 2.1, 'rmse': 2.8, 'n_labelled': 10}
 ```
 
 Rows are only cross-comparable where **both** `counted_class` and `tiled` match.
@@ -257,8 +313,32 @@ untiled count.
 `n_tiles` appears on tiled rows. `mae`, `rmse` and `n_labelled` appear only when
 truth covered that clip.
 
-Nothing is written to disk in benchmark or sweep mode; output is stdout only. Pipe
-it if you want to keep it.
+The rows are printed to stdout as they complete. In benchmark mode they are also
+saved to `results/` unless `--no-save` is passed; `--sweep` prints only.
+
+## Results files
+
+Each default-mode run (without `--no-save`) writes
+`results/benchmark-<YYYYMMDD-HHMMSS>.json`:
+
+```json
+{
+  "timestamp": "20260819-160821",
+  "settings": {
+    "conf": 0.35, "iou": 0.3, "n_frames": 50,
+    "tiled": false, "compare_tiling": false, "truth_supplied": false,
+    "tile_size": 640, "tile_overlap": 192,
+    "torch": "2.13.0+cpu", "cuda_available": false
+  },
+  "results": [ /* the same row dicts printed to stdout */ ],
+  "skipped": [ { "label": "...", "tiled": false, "video": "..." } ]
+}
+```
+
+`settings` records everything that affects the numbers (thresholds, frame count,
+tiling geometry, torch build, CUDA availability) so a result file is
+self-describing and old runs stay interpretable. `skipped` lists runs that failed
+and why they are absent from `results`.
 
 ## Caveats
 
@@ -280,16 +360,20 @@ These are the ones that will bite an unwary reader of the numbers:
 ## Troubleshooting
 
 **`Model not found: ...`** - a local path in `MODELS` is wrong, most likely
-because the script moved and `REPO_ROOT` no longer resolves.
+because `benchmarking/` is no longer a sibling of `crowd_detection/` and
+`MODEL_CROWDHUMAN` no longer resolves.
 
 **`No countable class ... found`** - the weight has no `person`/`head`/`face`
 class name, probably unnamed classes. Run `--diagnose`, read the median box
 heights, then add a `MODEL_CLASS_OVERRIDES` entry.
 
-**`VIDEO_PATHS is empty`** - no clips configured.
+**`VIDEO_PATHS is empty`** - no clips configured in `config.py`.
 
 **`No frames read from ...`** - the file exists but OpenCV cannot decode it.
 Check the codec.
+
+**`argument --diagnose/--show: invalid choice`** - the label must match a key of
+`MODELS` exactly, quoting included.
 
 **Every count is 0 at conf 0.35** - not necessarily a broken model. Run `--sweep`
 and check whether counts appear at 0.10 or 0.05. If they do, it is calibration.
