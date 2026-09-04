@@ -52,10 +52,34 @@ async def process_video(job_id: str, file_path: str):
     db = SessionLocal()
     tmp_json = None
     tmp_csv = None
+    status = "processing"
+
+    def update_job_tracking(progress=None, status=None, failure_reason=None):
+        job = db.query(Job).filter(Job.job_id == job_id).first()
+        if job:
+            if progress is not None:
+                job.progress = progress
+            if status is not None:
+                job.status = status
+            if failure_reason is not None:
+                job.failure_reason = failure_reason
+            job.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.commit()
+
+    job = db.query(Job).filter(Job.job_id == job_id).first()
+    if job:
+        job.status = "processing"
+        job.progress = 0
+        job.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        job.completed_at = None
+        job.failure_reason = None
+        job.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
 
     try:
         # Step 1: tracking (required - all other steps depend on it)
         tracking_result = await get_player_data(file_path)
+        update_job_tracking(progress=25)
 
         # Step 2: save tracking JSON + build tackle CSV for downstream calls
         tmp_json = tempfile.NamedTemporaryFile(
@@ -82,6 +106,7 @@ async def process_video(job_id: str, file_path: str):
             jersey_task, formation_task, tackle_task, crowd_task,
             return_exceptions=True
         )
+        update_job_tracking(progress=75)
         jersey_result, formation_result, tackle_result, crowd_result = results
 
         player_result = {
@@ -107,9 +132,12 @@ async def process_video(job_id: str, file_path: str):
         job = db.query(Job).filter(Job.job_id == job_id).first()
         if job:
             job.status = status
+            job.progress = 100
             job.player_result = player_result
             job.crowd_result = crowd_data
             job.error = " | ".join(errors) if errors else None
+            job.failure_reason = " | ".join(errors) if errors else None
+            job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             job.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             db.commit()
 
@@ -118,9 +146,13 @@ async def process_video(job_id: str, file_path: str):
         job = db.query(Job).filter(Job.job_id == job_id).first()
         if job:
             job.status = "failed"
+            job.progress = 100
             job.error = str(e)
+            job.failure_reason = str(e)
+            job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             job.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             db.commit()
+
     finally:
         db.close()
         # Keep video file on partial so retry can reuse it; delete on done/failed
