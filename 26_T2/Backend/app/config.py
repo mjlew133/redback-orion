@@ -7,6 +7,7 @@ PLAYER_SERVICE_URL = os.getenv("PLAYER_SERVICE_URL", "http://localhost:8080")
 CROWD_SERVICE_URL = os.getenv("CROWD_SERVICE_URL", "http://localhost:8002")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", 8000))
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", 500 * 1024 * 1024))
 
 USE_MOCK_SERVICES = os.getenv("USE_MOCK_SERVICES", "true").lower() == "true"
 USE_MOCK_PLAYER = os.getenv("USE_MOCK_PLAYER", str(USE_MOCK_SERVICES)).lower() == "true"
