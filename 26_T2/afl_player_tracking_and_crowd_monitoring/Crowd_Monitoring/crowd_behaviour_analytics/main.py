@@ -4,6 +4,7 @@ from crowd_behaviour_analytics.anomaly_model import detect_track_anomalies
 from crowd_behaviour_analytics.event_detection import detect_behaviour_events
 from crowd_behaviour_analytics.feature_extraction import (
     classify_crowd_state,
+    classify_density_trend,
     extract_density_features,
 )
 from crowd_behaviour_analytics.pose_analysis import refine_tracking_summary_with_pose
@@ -34,7 +35,10 @@ def analyze_behaviour(input_data):
     tracking_summary = summarise_tracks(track_histories)
     tracking_summary = refine_tracking_summary_with_pose(frames, frame_tracks, tracking_summary)
     anomaly_summary = detect_track_anomalies(track_histories)
-    crowd_state = classify_crowd_state(features)
+    # crowd_state is now a real trend over the per-frame person counts;
+    # density_level keeps the old static "how dense is it right now" score
+    crowd_state, density_trend_delta = classify_density_trend(frames)
+    density_level = classify_crowd_state(features)
     event_flags = detect_behaviour_events(
         features,
         vision_features,
@@ -57,6 +61,8 @@ def analyze_behaviour(input_data):
     return {
         "video_id": video_id,
         "crowd_state": crowd_state,
+        "density_level": density_level,
+        "density_trend_delta": density_trend_delta,
         "zones": zones,
         "event_flags": event_flags,
         "artifact_paths": artifact_paths,
