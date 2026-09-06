@@ -6,14 +6,18 @@ import time
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 from pathlib import Path
 
+# config before ultralytics: the dml path sets YOLO_AUTOINSTALL in os.environ,
+# which ultralytics only reads at import time.
 from .config import (
     DEFAULT_CONF, DEFAULT_IOU, MODEL_NAME, PEOPLE_ANNOTATED_DIR, PEOPLE_CLASS_ID, PEOPLE_MODEL_NAME,
     ANNOTATED_DIR, TILE_BATCH, TILE_COLS, TILE_IMGSZ, TILE_OVERLAP, TILE_ROWS, USE_FACE_DETECTION, USE_TILING, SAVE_TILE_DEBUG, TILE_DEBUG_DIR,
-    PREDICT_KWARGS, RESOLVED_DEVICE, USE_CUDA,
+    PREDICT_KWARGS, RESOLVED_DEVICE, USE_CUDA, USE_DML,
+    DETECT_STRIDE, DETECT_MAX_WIDTH, SKIP_EMPTY_TILES, MIN_TILE_FILL,
 )
+
+from ultralytics import YOLO
 from video_processing.tiling import generate_tiles   # sibling package; see note below
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +73,6 @@ def _nms(boxes, scores, iou_thresh):
         order = rest[_iou(boxes[i], boxes[rest]) < iou_thresh]
     return keep
 
-
 def load_models():
     face_model = None
     if USE_FACE_DETECTION:
@@ -77,6 +80,12 @@ def load_models():
         face_model = YOLO(MODEL_NAME)
 
     print(f"[INFO] Loading people model: {PEOPLE_MODEL_NAME}")
+    # Repin ONNX Runtime to DirectML before YOLO builds its inference session -
+    # Ultralytics only ever picks CUDA/CoreML/CPU providers on its own.
+    if USE_DML:
+        from .dml_backend import enable_dml
+        enable_dml()
+
     # task="detect" so an OpenVINO/ONNX export dir loads without the task-guess warning
     people_model = YOLO(PEOPLE_MODEL_NAME, task="detect")
 
@@ -89,6 +98,8 @@ def load_models():
     print("[INFO] Models ready ✓\n")
     return face_model, people_model
 
+
+## Scrap??? 
 def _save_tile_debug(tile, m, tile_dets, out_dir, tag, rows, cols, border_pad):
     """Write one tile crop with its own detections drawn, in tile-local
     coordinates: green = kept, red = dropped as a seam duplicate. Red lines mark
@@ -120,31 +131,62 @@ def _save_tile_debug(tile, m, tile_dets, out_dir, tag, rows, cols, border_pad):
     cv2.imwrite(str(out_dir / f"{tag}_tile_r{m['row']}c{m['column']}.jpg"), img)
 
 
-def detect_tiled(model, frame, conf, iou, keep_class=None,
-                 rows=TILE_ROWS, cols=TILE_COLS, overlap=TILE_OVERLAP, border_pad=4, imgsz=TILE_IMGSZ,
-                 batch=TILE_BATCH, debug_dir=None, debug_tag="frame"):
+def detect_tiled(tiles, meta, model, frame, conf, iou, keep_class=None,
+                 border_pad=4, imgsz=TILE_IMGSZ, batch=TILE_BATCH,
+                 debug_dir=None, debug_tag="frame",
+                 skip_empty=SKIP_EMPTY_TILES, tile_keep_mask=None):
     """Tile-and-merge detection. Returns the same [{'bbox', 'confidence'}] list
     the whole-frame path returns, so draw_boxes() is unchanged.
+
+    tiles/meta come from the upstream tiler (video_processing), rebuilt from
+    metadata by tiles_from_meta(). Both are index-aligned and in full-frame
+    coordinates.
 
     Tiles are run in batched forward passes (batch tiles per call) rather than
     one call per tile; this is where GPU acceleration actually pays off, and it
     helps on CPU too by amortising per-call overhead.
 
+    skip_empty drops tiles that are ~all black (field masked out upstream).
+
     If debug_dir is given, each tile crop is written there with its own
     detections drawn (green kept, red dropped) for inspecting the tiling.
     """
-    h, w = frame.shape[:2]
-    tiles, meta = generate_tiles(frame, rows, cols, overlap)
+    h0, w0 = frame.shape[:2]
 
+    # grid comes from the metadata, not config, so seam logic can't disagree
+    # with the tiler that actually produced these tiles
+    rows = max(m["row"] for m in meta) + 1
+    cols = max(m["column"] for m in meta) + 1
+
+    # skip tiles that are essentially all black - the field pixels the
+    # crowd_mask zeroed out hold no people
+    if skip_empty:
+        if tile_keep_mask is not None and len(tile_keep_mask) == len(meta):
+            # crowd_mask is identical for every frame in the video, so this
+            # per-tile decision was already computed once from the mask
+            # itself (see _tiles_kept_by_mask) instead of re-deriving it here
+            # with a cvtColor+countNonZero on every tile of every frame
+            keep = [(t, m) for t, m, k in zip(tiles, meta, tile_keep_mask) if k]
+        else:
+            floor = MIN_TILE_FILL
+            keep = [(t, m) for t, m in zip(tiles, meta)
+                    if cv2.countNonZero(cv2.cvtColor(t, cv2.COLOR_BGR2GRAY))
+                    > floor * t.shape[0] * t.shape[1]]
+        if not keep:
+            return []
+        tiles = [t for t, _ in keep]
+        meta  = [m for _, m in keep]          # must filter both or they desync
+    
     boxes, scores = [], []
     for start in range(0, len(tiles), batch):
         chunk_tiles = tiles[start:start + batch]
-        chunk_meta = meta[start:start + batch]
-        results = model(chunk_tiles, conf=conf, iou=iou, imgsz=imgsz, verbose=False, **PREDICT_KWARGS)
+        chunk_meta  = meta[start:start + batch]
+        results = model(chunk_tiles, conf=conf, iou=iou, imgsz=imgsz,
+                        verbose=False, **PREDICT_KWARGS)
 
         for tile, m, r in zip(chunk_tiles, chunk_meta, results):
             tw, th = m["width"], m["height"]
-            tile_dets = []   # (x1, y1, x2, y2, score, kept) in tile-local coords, for debug
+            tile_dets = []   # (x1, y1, x2, y2, score, kept) tile-local, for debug
             for b in r.boxes:
                 if keep_class is not None and int(b.cls[0]) != keep_class:
                     continue
@@ -161,8 +203,9 @@ def detect_tiled(model, frame, conf, iou, keep_class=None,
                 if on_seam:
                     continue
 
-                # remap tile-local -> full frame (plain offset; tiles aren't resized)
-                boxes.append((x1 + m["x"], y1 + m["y"], x2 + m["x"], y2 + m["y"]))
+                # remap tile-local -> full frame (plain offset)
+                boxes.append((x1 + m["x"], y1 + m["y"],
+                              x2 + m["x"], y2 + m["y"]))
                 scores.append(score)
 
             if debug_dir is not None:
@@ -172,26 +215,30 @@ def detect_tiled(model, frame, conf, iou, keep_class=None,
     if not boxes:
         return []
 
-    boxes  = np.clip(np.array(boxes, float), 0, [w, h, w, h])   # clamp to frame
+    boxes  = np.clip(np.array(boxes, float), 0, [w0, h0, w0, h0])
     scores = np.array(scores, float)
     return [
         {"bbox": [int(v) for v in boxes[i]],
          "confidence": round(float(scores[i]), 4)}
-        for i in _nms(boxes, scores, iou)                       # cross-tile dedupe
+        for i in _nms(boxes, scores, iou)                   # cross-tile dedupe
     ]
 
-def detect_faces(model, frame, conf, iou, use_tiling=False, debug_dir=None, debug_tag="frame"):
+def detect_faces(tiles, meta, model, frame, conf, iou, use_tiling=False,
+                 debug_dir=None, debug_tag="frame", tile_keep_mask=None):
     if use_tiling:
-        return detect_tiled(model, frame, conf, iou,             # single class
-                            debug_dir=debug_dir, debug_tag=f"{debug_tag}_face")
+        return detect_tiled(tiles, meta, model, frame, conf, iou,
+                            debug_dir=debug_dir, debug_tag=f"{debug_tag}_face",
+                            tile_keep_mask=tile_keep_mask)
     results = model(frame, conf=conf, iou=iou, verbose=False, **PREDICT_KWARGS)[0]
     return [{"bbox": list(map(int, b.xyxy[0].tolist())),
              "confidence": round(float(b.conf[0]), 4)} for b in results.boxes]
 
-def detect_people(model, frame, conf, iou, use_tiling=False, debug_dir=None, debug_tag="frame"):
+def detect_people(tiles, meta, model, frame, conf, iou, use_tiling=False, debug_dir=None, debug_tag="frame",
+                  tile_keep_mask=None):
     if use_tiling:
-        return detect_tiled(model, frame, conf, iou, keep_class=PEOPLE_CLASS_ID ,   # COCO person
-                            debug_dir=debug_dir, debug_tag=f"{debug_tag}_people")
+        return detect_tiled(tiles, meta, model, frame, conf, iou, keep_class=PEOPLE_CLASS_ID ,   # COCO person
+                            debug_dir=debug_dir, debug_tag=f"{debug_tag}_people",
+                            tile_keep_mask=tile_keep_mask)
     results = model(frame, conf=conf, iou=iou, verbose=False, **PREDICT_KWARGS)[0]
     detections = []
 
@@ -247,6 +294,23 @@ def draw_boxes(frame, detections):
 
     return output
 
+def tiles_from_meta(frame, meta):
+    return [frame[m["y"]:m["y"] + m["height"],
+                  m["x"]:m["x"] + m["width"]] for m in meta]
+
+def _tiles_kept_by_mask(meta, crowd_mask, min_fill):
+    """Precompute which tile positions have enough non-masked area to be
+    worth running the detector on. A tile's black pixels come only from the
+    (video-static) crowd_mask, never from frame content, so this is the same
+    for every frame in the video and only needs to be derived once - directly
+    from the mask itself, with no per-tile cvtColor/countNonZero on image data."""
+    mh, mw = crowd_mask.shape[:2]
+    keep = []
+    for m in meta:
+        x, y, w, h = m["x"], m["y"], m["width"], m["height"]
+        region = crowd_mask[y:min(y + h, mh), x:min(x + w, mw)]
+        keep.append(cv2.countNonZero(region) > min_fill * w * h)
+    return keep
 
 def detect_crowd(processed_video: dict) -> dict:
     face_model, people_model = load_models() 
@@ -266,8 +330,23 @@ def detect_crowd(processed_video: dict) -> dict:
         tile_debug_dir = TILE_DEBUG_OUTPUT_DIR / safe_video_id
 
     detection_ms_total = 0.0
+    frames_detected = 0
+    # (1) temporal decimation: results carried forward on non-detect frames
+    last_people = []
+    last_face = None
 
-    for frame_data in processed_video["frames"]:
+    # one reusable field/roof/etc keep-mask from crowd_region_preprocessing,
+    # applied here instead of it writing a masked JPEG per frame
+    crowd_mask = processed_video.get("crowd_mask")
+    mask_shape_warned = False
+
+    # computed once from the first frame's tile grid + crowd_mask (both are
+    # static for the whole video); None until then, after which it is reused
+    # by every remaining frame instead of being re-derived per frame
+    tile_keep_mask = None
+    tile_keep_mask_ready = False
+
+    for frame_index, frame_data in enumerate(processed_video["frames"]):
         frame_path = frame_data["frame_path"]
         resolved_frame_path = Path(frame_path)
         if not resolved_frame_path.is_absolute():
@@ -282,24 +361,59 @@ def detect_crowd(processed_video: dict) -> dict:
         if frame_width <= 0 or frame_height <= 0:
             frame_height, frame_width = frame.shape[:2]
 
+        if crowd_mask is not None:
+            if crowd_mask.shape[:2] == frame.shape[:2]:
+                frame = cv2.bitwise_and(frame, frame, mask=crowd_mask)
+            elif not mask_shape_warned:
+                print(f"[WARN] crowd_mask {crowd_mask.shape[:2]} != frame {frame.shape[:2]}; not masking")
+                mask_shape_warned = True
+
         debug_tag = f"frame_{frame_data['frame_id']:04d}"
 
-        # time the detection work only (model inference + tiling/NMS), not the
-        # frame read or the annotate/save I/O
-        detect_start = time.perf_counter()
-        people_detections = detect_people(people_model, frame, DEFAULT_CONF, DEFAULT_IOU,
-                                          use_tiling=USE_TILING, debug_dir=tile_debug_dir, debug_tag=debug_tag)
+        # (1) run the detector only every DETECT_STRIDE-th frame; the frames in
+        # between reuse the previous detections so the output schema and frame
+        # count are unchanged for everything downstream
+        run_detect = (frame_index % max(DETECT_STRIDE, 1) == 0)
 
-        # face detection is an optional, separate output stream; nothing
-        # downstream consumes it, so it is off by default (USE_FACE_DETECTION)
         face_detections = None
         face_count = None
         face_annotated_frame_path = None
-        if USE_FACE_DETECTION:
-            face_detections = detect_faces(face_model, frame, DEFAULT_CONF, DEFAULT_IOU,
-                                           use_tiling=USE_TILING, debug_dir=tile_debug_dir, debug_tag=debug_tag)
-        detection_ms = round((time.perf_counter() - detect_start) * 1000, 1)
-        detection_ms_total += detection_ms
+
+        meta = frame_data.get("tiles") or []
+        tile_this_frame = USE_TILING and bool(meta)
+
+        if not tile_keep_mask_ready and tile_this_frame and SKIP_EMPTY_TILES:
+            # crowd_mask is unchanged for the rest of the video once we get
+            # here, so this decision (and mask_shape_warned) will also hold
+            # for every later frame
+            if crowd_mask is not None and crowd_mask.shape[:2] == frame.shape[:2]:
+                tile_keep_mask = _tiles_kept_by_mask(meta, crowd_mask, MIN_TILE_FILL)
+            tile_keep_mask_ready = True
+
+        tiles = tiles_from_meta(frame, meta) if tile_this_frame else []
+
+        if run_detect:
+            # time the detection work only (model inference + tiling/NMS), not
+            # the frame read or the annotate/save I/O
+            detect_start = time.perf_counter()
+            people_detections = detect_people(tiles, meta, people_model, frame, DEFAULT_CONF, DEFAULT_IOU,
+              use_tiling=tile_this_frame, debug_dir=tile_debug_dir, debug_tag=debug_tag, tile_keep_mask=tile_keep_mask)
+
+            # face detection is an optional, separate output stream; nothing
+            # downstream consumes it, so it is off by default (USE_FACE_DETECTION)
+            if USE_FACE_DETECTION:
+                face_detections = detect_faces(tiles, meta, face_model, frame, DEFAULT_CONF, DEFAULT_IOU,
+                                               use_tiling=USE_TILING, debug_dir=tile_debug_dir, debug_tag=debug_tag,
+                                               tile_keep_mask=tile_keep_mask)
+
+            detection_ms = round((time.perf_counter() - detect_start) * 1000, 1)
+            detection_ms_total += detection_ms
+            frames_detected += 1
+            last_people, last_face = people_detections, face_detections
+        else:
+            people_detections = last_people
+            face_detections = last_face if USE_FACE_DETECTION else None
+            detection_ms = 0.0
 
         if USE_FACE_DETECTION:
             face_count = len(face_detections)
@@ -323,6 +437,7 @@ def detect_crowd(processed_video: dict) -> dict:
             "person_count": len(people_detections),
             "face_count": face_count,
             "detection_ms": detection_ms,
+            "detected": run_detect,   # False = detections carried from a prior frame
             "face_detections": face_detections if face_detections is not None else [],
             "people_detections": people_detections,
         })
@@ -344,7 +459,12 @@ def detect_crowd(processed_video: dict) -> dict:
         "openvino": backend == "openvino",
         "tiling": USE_TILING,
         "frames_processed": frames_timed,
+        "frames_detected": frames_detected,   # rest were carried forward (DETECT_STRIDE)
+        "detect_stride": DETECT_STRIDE,
+        "detect_max_width": DETECT_MAX_WIDTH,
+        "skip_empty_tiles": SKIP_EMPTY_TILES,
         "total_detection_seconds": round(detection_ms_total / 1000, 2),
+        "ms_per_detected_frame": round(detection_ms_total / frames_detected, 1) if frames_detected else 0.0,
         "peak_people_per_frame": peak_people,
     }
 
@@ -357,6 +477,9 @@ def detect_crowd(processed_video: dict) -> dict:
     print(f"  backend/device  : {summary['backend']} on {summary['device']}")
     print(f"  openvino        : {summary['openvino']}")
     print(f"  total time      : {summary['total_detection_seconds']:.2f} s over {frames_timed} frame(s)")
+    print(f"  detector runs   : {frames_detected}/{frames_timed} frame(s) "
+          f"(stride {DETECT_STRIDE}), {summary['ms_per_detected_frame']:.0f} ms each")
+    print(f"  downscale/skip  : max_width={DETECT_MAX_WIDTH or 'off'}, skip_empty_tiles={SKIP_EMPTY_TILES}")
     print(f"  people detected : peak {peak_people}/frame")
     print(f"  summary json    : {summary_path}")
 
@@ -367,6 +490,3 @@ def detect_crowd(processed_video: dict) -> dict:
         "detection_summary": summary,
         "frames":   all_results,
     }
-
-    
-    
