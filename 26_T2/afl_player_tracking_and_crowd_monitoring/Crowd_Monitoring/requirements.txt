@@ -2,6 +2,10 @@ numpy
 pandas
 opencv-python
 ultralytics
+openvino>=2024.0.0   # CPU inference backend for crowd_detection when CROWD_DEVICE=cpu (see config.PEOPLE_MODEL_NAME)
+# For NVIDIA / CUDA inference (CROWD_DEVICE=cuda:0) install a CUDA build of torch first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# The default `pip install ultralytics` pulls a CPU-only torch and will silently stay on CPU.
 matplotlib
 scikit-learn
 scipy
