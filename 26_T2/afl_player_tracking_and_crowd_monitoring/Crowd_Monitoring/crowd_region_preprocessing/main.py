@@ -1,4 +1,12 @@
-"""Prepare crowd-focused frames before crowd detection runs."""
+"""Black out fixed non-crowd regions before crowd detection runs.
+
+Exclude-only. Mark the static structures to remove (roof, signage, concourse,
+foreground rails) as polygons in `exclude_polygons_normalized`; everything else
+is kept. There is deliberately no "keep" polygon and no auto field detector -
+an include region around a moving crowd clips real people the moment they drift
+past its edge, and the green-field HSV detector clips crowd pixels that happen
+to be green-ish.
+"""
 
 from __future__ import annotations
 
@@ -24,107 +32,81 @@ def _resolve_frame_path(frame_path: str) -> Path:
     return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
 
 
-def _build_polygon_mask(frame_shape: tuple[int, int, int], points: list[list[float]]) -> np.ndarray:
-    height, width = frame_shape[:2]
-    polygon = np.array(
-        [[int(point[0] * width), int(point[1] * height)] for point in points],
-        dtype=np.int32,
-    )
-    mask = np.zeros((height, width), dtype=np.uint8)
-    cv2.fillPoly(mask, [polygon], 255)
+def _normalize_polygons(raw) -> list[list[list[float]]]:
+    """Accept one polygon ([[x, y], ...]) or a list of them; normalised (0-1)."""
+    if not raw:
+        return []
+    first = raw[0]
+    if first and isinstance(first[0], (int, float)):
+        return [raw]
+    return [poly for poly in raw if poly]
+
+
+def _build_keep_mask(height: int, width: int, exclude_polygons) -> np.ndarray:
+    """255 everywhere except inside the exclude polygons (which become 0). Pure
+    geometry - depends only on frame size, so it's built once per video."""
+    mask = np.full((height, width), 255, dtype=np.uint8)
+    for poly in _normalize_polygons(exclude_polygons):
+        pts = np.array([[int(px * width), int(py * height)] for px, py in poly], dtype=np.int32)
+        cv2.fillPoly(mask, [pts], 0)
     return mask
 
 
-def _detect_field_mask(frame: np.ndarray, config: dict) -> np.ndarray:
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower = np.array(config["green_hsv_lower"], dtype=np.uint8)
-    upper = np.array(config["green_hsv_upper"], dtype=np.uint8)
-
-    mask = cv2.inRange(hsv, lower, upper)
-    kernel_size = max(1, int(config["morph_kernel_size"]))
-    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return np.zeros_like(mask)
-
-    min_ratio = float(config["min_field_area_ratio"])
-    min_area = frame.shape[0] * frame.shape[1] * min_ratio
-
-    filtered = np.zeros_like(mask)
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area >= min_area:
-            cv2.drawContours(filtered, [contour], -1, 255, thickness=cv2.FILLED)
-
-    if not np.any(filtered):
-        return np.zeros_like(mask)
-
-    dilation_size = max(1, int(config["field_mask_dilation_kernel"]))
-    dilation_kernel = np.ones((dilation_size, dilation_size), dtype=np.uint8)
-    return cv2.dilate(filtered, dilation_kernel, iterations=1)
-
-
 def _prepare_frame(frame: np.ndarray, config: dict) -> tuple[np.ndarray, dict]:
-    field_polygon = config.get("field_polygon_normalized", [])
-    crowd_polygon = config.get("crowd_polygon_normalized", [])
-
-    if field_polygon:
-        field_mask = _build_polygon_mask(frame.shape, field_polygon)
-        mask_source = "manual_field_polygon"
-    else:
-        field_mask = _detect_field_mask(frame, config)
-        mask_source = "auto_green_field_mask"
-
-    if crowd_polygon:
-        crowd_mask = _build_polygon_mask(frame.shape, crowd_polygon)
-        mask_source = f"{mask_source}+manual_crowd_polygon"
-    elif np.any(field_mask):
-        crowd_mask = cv2.bitwise_not(field_mask)
-    else:
-        crowd_mask = np.full(frame.shape[:2], 255, dtype=np.uint8)
-        mask_source = "no_field_mask_detected"
-
-    focused = cv2.bitwise_and(frame, frame, mask=crowd_mask)
-    field_ratio = round(float(np.count_nonzero(field_mask)) / float(field_mask.size), 4) if np.any(field_mask) else 0.0
-    crowd_ratio = round(float(np.count_nonzero(crowd_mask)) / float(crowd_mask.size), 4)
-
-    metadata = {
-        "mask_source": mask_source,
-        "field_visible_ratio": field_ratio,
-        "crowd_visible_ratio": crowd_ratio,
-    }
-    return focused, metadata
+    """Mask one frame. Standalone/debug helper; the pipeline builds the mask
+    once in prepare_crowd_frames and applies it in detect_crowd."""
+    height, width = frame.shape[:2]
+    keep_mask = _build_keep_mask(height, width, config.get("exclude_polygons_normalized"))
+    focused = cv2.bitwise_and(frame, frame, mask=keep_mask)
+    ratio = round(float(cv2.countNonZero(keep_mask)) / float(keep_mask.size), 4)
+    return focused, {"crowd_visible_ratio": ratio}
 
 
 def prepare_crowd_frames(processed_video: dict) -> dict:
+    """Attach ONE reusable keep-mask to the video dict. detect_crowd applies it
+    to each frame it already reads. write_focused_frames=true also dumps the
+    masked JPEGs (debug / UI)."""
     config = load_config()
-    output_dir = PROJECT_ROOT / config["focused_frames_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
+    exclude_polygons = config.get("exclude_polygons_normalized")
+    write_focused = bool(config.get("write_focused_frames", False))
 
-    focused_video = deepcopy(processed_video)
-    focused_frames = []
+    result = deepcopy(processed_video)
+    frames = result.get("frames", [])
 
-    for frame_data in processed_video.get("frames", []):
-        source_path = _resolve_frame_path(frame_data["frame_path"])
-        frame = cv2.imread(str(source_path))
+    height = int(processed_video.get("frame_height") or 0)
+    width = int(processed_video.get("frame_width") or 0)
+    if (height <= 0 or width <= 0) and frames:
+        probe = cv2.imread(str(_resolve_frame_path(frames[0]["frame_path"])))
+        if probe is not None:
+            height, width = probe.shape[:2]
+    if height <= 0 or width <= 0:
+        return result  # unknown frame size - pass through unmasked
 
-        if frame is None:
-            focused_frames.append(frame_data)
-            continue
+    keep_mask = _build_keep_mask(height, width, exclude_polygons)
+    n_excl = len(_normalize_polygons(exclude_polygons))
+    mask_source = f"exclude x{n_excl}" if n_excl else "keep_all"
+    result["crowd_mask"] = keep_mask
+    result["crowd_mask_source"] = mask_source
 
-        focused_frame, metadata = _prepare_frame(frame, config)
-        output_name = f"frame_{frame_data['frame_id']:04d}.jpg"
-        output_path = output_dir / output_name
-        cv2.imwrite(str(output_path), focused_frame)
+    if not np.any(keep_mask):
+        print("[WARN] crowd_region_preprocessing: exclude polygons cover the whole frame.")
 
-        updated_frame = dict(frame_data)
-        updated_frame["source_frame_path"] = frame_data["frame_path"]
-        updated_frame["frame_path"] = str(output_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
-        updated_frame["crowd_focus_metadata"] = metadata
-        focused_frames.append(updated_frame)
+    out_dir = None
+    if write_focused:
+        out_dir = PROJECT_ROOT / config["focused_frames_dir"]
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    focused_video["frames"] = focused_frames
-    return focused_video
+    for frame_data in frames:
+        frame_data["source_frame_path"] = frame_data["frame_path"]
+        frame_data["crowd_focus_metadata"] = {"mask_source": mask_source}
+        if write_focused:
+            img = cv2.imread(str(_resolve_frame_path(frame_data["frame_path"])))
+            if img is None:
+                continue
+            if keep_mask.shape[:2] == img.shape[:2]:
+                img = cv2.bitwise_and(img, img, mask=keep_mask)
+            dst = out_dir / f"frame_{frame_data['frame_id']:04d}.jpg"
+            cv2.imwrite(str(dst), img)
+            frame_data["frame_path"] = str(dst.relative_to(PROJECT_ROOT)).replace("\\", "/")
+
+    return result
