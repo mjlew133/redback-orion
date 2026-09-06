@@ -1,13 +1,26 @@
 """Lightweight person tracking for crowd behaviour analytics."""
 
+import os
+import shutil
 from math import sqrt
 from pathlib import Path
-import shutil
 
 import cv2
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_ROOT = PROJECT_ROOT / "crowd_behaviour_analytics" / "output"
+
+# track_people's match step is O(detections x active_tracks). With a bucket
+# index each detection only compares against tracks in nearby grid cells, which
+# is a strict superset of what the full scan would have matched for any
+# plausible person-box size. Set CROWD_TRACK_BUCKET=false to fall back to the
+# full scan (identical output either way).
+_TRACK_BUCKET = os.environ.get("CROWD_TRACK_BUCKET", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+# save_motion_annotations re-reads + redraws + rewrites one 4K frame per input
+# frame; the demo only ever shows one motion visual. Annotate just the N frames
+# with the most walking/running tracks. 0 = annotate every frame (original).
+_MOTION_ANNOTATION_MAX_FRAMES = int(os.environ.get("CROWD_MOTION_ANNOTATION_MAX_FRAMES", "3"))
 
 
 def _centroid(bbox):
@@ -92,10 +105,45 @@ def track_people(frames, max_distance=80.0, min_iou=0.1, max_missed_time=3.0):
     frame_tracks = []
     next_track_id = 1
 
+    cell = max(max_distance, 1.0)
+    buckets = {}   # (bx, by) -> set(track_id), only maintained when _TRACK_BUCKET
+
+    def _bkey(cx, cy):
+        return (int(cx // cell), int(cy // cell))
+
+    def _bucket_add(tid, cx, cy):
+        b = _bkey(cx, cy)
+        active_tracks[tid]["_bkey"] = b
+        buckets.setdefault(b, set()).add(tid)
+
+    def _bucket_remove(tid):
+        b = active_tracks.get(tid, {}).get("_bkey")
+        if b in buckets:
+            buckets[b].discard(tid)
+
+    def _candidates(cx, cy):
+        # ascending track_id -> same relative order the full dict scan used, so
+        # exact-tie score comparisons resolve identically
+        if not _TRACK_BUCKET:
+            return sorted(active_tracks)
+        bx, by = _bkey(cx, cy)
+        found = set()
+        for dx in (-2, -1, 0, 1, 2):
+            for dy in (-2, -1, 0, 1, 2):
+                found.update(buckets.get((bx + dx, by + dy), ()))
+        return sorted(found)
+
     sorted_frames = sorted(frames or [], key=lambda frame: frame.get("frame_id", 0))
 
     for frame in sorted_frames:
         timestamp = float(frame.get("timestamp", 0.0))
+
+        # drop tracks too old to ever match (the scan below would skip them anyway)
+        for tid in [t for t, trk in active_tracks.items()
+                    if timestamp - trk["timestamp"] > max_missed_time]:
+            _bucket_remove(tid)
+            del active_tracks[tid]
+
         detections = frame.get("people_detections", [])
         used_track_ids = set()
         tracked_detections = []
@@ -109,8 +157,11 @@ def track_people(frames, max_distance=80.0, min_iou=0.1, max_missed_time=3.0):
             best_match = None
             best_score = None
 
-            for track_id, track in active_tracks.items():
+            for track_id in _candidates(centroid[0], centroid[1]):
                 if track_id in used_track_ids:
+                    continue
+                track = active_tracks.get(track_id)
+                if track is None:
                     continue
 
                 time_gap = max(timestamp - track["timestamp"], 0.0001)
@@ -138,7 +189,6 @@ def track_people(frames, max_distance=80.0, min_iou=0.1, max_missed_time=3.0):
                 speed = 0.0
                 normalized_speed = 0.0
                 direction = (0.0, 0.0)
-                history = []
             else:
                 previous = active_tracks[best_match]
                 delta_t = max(timestamp - previous["timestamp"], 0.0001)
@@ -152,7 +202,6 @@ def track_people(frames, max_distance=80.0, min_iou=0.1, max_missed_time=3.0):
                 normalized_speed = pixel_distance / avg_height
                 direction = (round(dx, 2), round(dy, 2))
                 track_id = best_match
-                history = track_histories.get(track_id, [])
 
             bbox_width, bbox_height = _bbox_size(bbox)
             ground_anchor = _ground_anchor(bbox)
@@ -171,7 +220,8 @@ def track_people(frames, max_distance=80.0, min_iou=0.1, max_missed_time=3.0):
             }
             tracked_detections.append(track_entry)
 
-            history = history + [
+            # append in place (was history = history + [...], O(n) copy per update)
+            track_histories.setdefault(track_id, []).append(
                 {
                     "frame_id": frame.get("frame_id"),
                     "timestamp": timestamp,
@@ -182,15 +232,16 @@ def track_people(frames, max_distance=80.0, min_iou=0.1, max_missed_time=3.0):
                     "bbox_height": bbox_height,
                     "bbox_aspect_ratio": track_entry["bbox_aspect_ratio"],
                 }
-            ]
+            )
 
-            track_histories[track_id] = history
+            _bucket_remove(track_id)
             active_tracks[track_id] = {
                 "centroid": centroid,
                 "timestamp": timestamp,
                 "bbox_height": bbox_height,
                 "bbox": bbox,
             }
+            _bucket_add(track_id, centroid[0], centroid[1])
             used_track_ids.add(track_id)
 
         frame_tracks.append(
@@ -417,7 +468,19 @@ def save_motion_annotations(frame_tracks, tracking_summary, video_id=None):
 
     highlight_dynamic_only = bool(walking_track_ids or running_track_ids)
 
-    for frame in frame_tracks:
+    # only bother annotating the frames that actually carry the states we draw
+    highlight_ids = (walking_track_ids | running_track_ids) if highlight_dynamic_only \
+        else (stationary_track_ids | walking_track_ids | running_track_ids)
+    selected = frame_tracks
+    if _MOTION_ANNOTATION_MAX_FRAMES > 0 and len(frame_tracks) > _MOTION_ANNOTATION_MAX_FRAMES:
+        def _hits(fr):
+            return sum(1 for t in fr.get("tracked_detections", []) if t.get("track_id") in highlight_ids)
+        selected = sorted(
+            sorted(frame_tracks, key=_hits, reverse=True)[:_MOTION_ANNOTATION_MAX_FRAMES],
+            key=lambda fr: fr.get("frame_id", 0),
+        )
+
+    for frame in selected:
         source_path = frame.get("people_annotated_frame_path")
         if not source_path:
             continue
