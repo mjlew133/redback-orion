@@ -4,8 +4,13 @@ opencv-python
 ultralytics
 openvino>=2024.0.0   # CPU inference backend for crowd_detection when CROWD_DEVICE=cpu (see config.PEOPLE_MODEL_NAME)
 # For NVIDIA / CUDA inference (CROWD_DEVICE=cuda:0) install a CUDA build of torch first:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# (cu128 for Python 3.14; cu124 has no cp314 wheels and errors "no matching distribution")
 # The default `pip install ultralytics` pulls a CPU-only torch and will silently stay on CPU.
+# For AMD / Intel GPU inference (CROWD_DEVICE=dml) use the ONNX export + DirectML.
+# Install ONLY the DirectML build - plain onnxruntime / -gpu share its folder and shadow it:
+#   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+#   pip install onnxruntime-directml
 matplotlib
 scikit-learn
 scipy
