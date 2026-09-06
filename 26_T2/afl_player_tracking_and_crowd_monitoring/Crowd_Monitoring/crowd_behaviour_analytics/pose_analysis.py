@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import cv2
@@ -9,6 +10,11 @@ from ultralytics import YOLO
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Pose refinement runs one YOLO-pose inference per walking person per frame, on
+# CPU, one crop at a time - the slowest stage in the crowd pipeline. Skipped
+# unless CROWD_POSE_REFINEMENT is truthy (1/true/yes/on).
+POSE_REFINEMENT_ENABLED = os.environ.get("CROWD_POSE_REFINEMENT", "").strip().lower() in {"1", "true", "yes", "on"}
 POSE_MODEL_CANDIDATES = [
     PROJECT_ROOT / "crowd_behaviour_analytics" / "yolov8n-pose.pt",
     PROJECT_ROOT / "crowd_behaviour_analytics" / "yolov8s-pose.pt",
@@ -158,6 +164,9 @@ def refine_tracking_summary_with_pose(
     min_pose_motion_score=0.03,
 ):
     """Validate walking tracks with leg-keypoint motion when a local pose model is available."""
+    if not POSE_REFINEMENT_ENABLED:
+        return tracking_summary
+
     pose_model = _load_pose_model()
     if pose_model is None:
         return tracking_summary
