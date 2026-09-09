@@ -225,7 +225,7 @@ def analyze_density(input_data: dict[str, Any]) -> dict[str, Any]:
     zones_output = [
         {
             "zone_id": zone_id,
-            "person_count": count,
+            "person_count": round(averages[zone_id]),
             "density": densities[zone_id],
             "average_count_per_frame": averages[zone_id],
             "density_level": classify_density(densities[zone_id]),
