@@ -337,12 +337,7 @@ Thank you for using AFL Analytics Platform.
               Download and manage generated reports
             </p>
           </div>
-          <LiveClock
-            isLive={isLive}
-            onToggleLive={setIsLive}
-            matchTime={{ quarter: 2, timeRemaining: "15:23" }}
-          />
-
+          
           <Tabs defaultValue="browse" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="browse" className="flex items-center gap-2">

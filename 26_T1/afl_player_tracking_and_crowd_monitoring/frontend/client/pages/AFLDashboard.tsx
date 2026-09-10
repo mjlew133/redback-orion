@@ -1610,9 +1610,8 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                     Welcome, {userEmail}
                   </span>
                 )}
-                <Button variant="outline" size="sm">
-                  <Settings className="w-4 h-4 mr-2" />
-                  Settings
+                <Button variant="outline" size="sm"onClick={() => navigate("/settings")} >
+                  <Settings className="w-4 h-4 mr-2" />   Settings
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleLogout}>
                   <LogOut className="w-4 h-4 mr-2" />
@@ -1712,7 +1711,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                       >
                         <div className="font-medium">{player.name}</div>
                         <div className="text-sm text-gray-600">
-                          {player.team} ��� {player.position}
+                          {player.team} &bull; {player.position}
                         </div>
                         <div className="text-xs text-green-600 mt-1">
                           Efficiency: {player.efficiency}%
