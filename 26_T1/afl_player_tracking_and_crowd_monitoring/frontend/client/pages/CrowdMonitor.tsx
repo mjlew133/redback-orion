@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import MobileNavigation from "@/components/MobileNavigation";
+import LiveClock from "@/components/LiveClock";
 import {
   Users,
   TrendingUp,
@@ -415,7 +416,7 @@ export default function CrowdMonitor() {
               <Card>
                 <CardHeader>
                   <CardTitle>{selectedZone.name}</CardTitle>
-                  <CardDescription className="flex items-center gap-4">
+                   <div className="text-sm text-muted-foreground flex items-center gap-4">
                     <Badge
                       className={`
                          ${
@@ -437,7 +438,7 @@ export default function CrowdMonitor() {
                       {selectedZone.current.toLocaleString()} /{" "}
                       {selectedZone.capacity.toLocaleString()}
                     </span>
-                  </CardDescription>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

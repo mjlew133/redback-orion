@@ -342,7 +342,8 @@ export default function PlayerPerformance() {
   const [selectedVideo, setSelectedVideo] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState("");
   const [jobs, setJobs] = useState<any[]>([]);
-  const token = localStorage.getItem("token");
+    const token =
+    localStorage.getItem("accessToken") || localStorage.getItem("authToken");
   const [jobStatus, setJobStatus] = useState("");
   const [jobId, setJobId] = useState("");
   const [jobError, setJobError] = useState("");
@@ -377,24 +378,10 @@ export default function PlayerPerformance() {
     return data.jobs;
   };
 
-  const handleUpload = async () => {
+    const handleUpload = async () => {
     if (!selectedVideo) {
       setUploadStatus("Please choose a video first");
       return;
-    }
-  };
-
-  const handleDeletePlayer = async (playerId: number) => {
-    try {
-      const res = await fetch(`http://localhost:8000/api/player/${playerId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Delete failed");
-      setPlayers((prev) => prev.filter((p) => p.id !== playerId));
-    } catch (err) {
-      console.error("Delete failed:", err);
-      ;
     }
 
     setUploadStatus("Uploading...");
@@ -415,18 +402,23 @@ export default function PlayerPerformance() {
     }
   };
 
-
-  useEffect(() => {
-    fetch("http://localhost:8000/api/players")
-      .then((res) => res.json())
-      .then((data) => {
-        const playerList = Array.isArray(data) ? data.map(normalizePlayer) : [];
-        setPlayers(playerList.length > 0 ? playerList : generatePlayerData());
-      })
-      .catch((err) => {
-        console.error("API ERROR:", err);
-        setPlayers(generatePlayerData());
+  const handleDeletePlayer = async (playerId: number) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/player/${playerId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
       });
+      if (!res.ok) throw new Error("Delete failed");
+      setPlayers((prev) => prev.filter((p) => p.id !== playerId));
+    } catch (err) {
+      console.error("Delete failed:", err);
+    }
+  };
+
+   useEffect(() => {
+    // Backend has no "list all players" endpoint — POST /api/players is
+    // actually the video-upload route, so calling it here always 405'd.
+    setPlayers(generatePlayerData());
   }, []);
 
   useEffect(() => {
