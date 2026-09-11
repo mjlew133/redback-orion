@@ -66,7 +66,7 @@ import {
   Star,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-
+import { useThemePreferences } from "@/components/ThemePreferences";
 // Comprehensive player data with enhanced AFL statistics
 const generatePlayerData = () => {
   const teams = [
@@ -293,9 +293,38 @@ const normalizePlayer = (p: any) => ({
   possessionData: [],
 });
 
+function formatHeight(height: string, units: "metric" | "imperial") {
+  const metres = Number.parseFloat(height);
+
+  if (Number.isNaN(metres)) {
+    return height;
+  }
+
+  if (units === "metric") {
+    return `${Math.round(metres * 100)} cm`;
+  }
+
+  return `${Math.round(metres * 39.3701)} in`;
+}
+
+function formatWeight(weight: string, units: "metric" | "imperial") {
+  const kilograms = Number.parseFloat(weight);
+
+  if (Number.isNaN(kilograms)) {
+    return weight;
+  }
+
+  if (units === "metric") {
+    return `${Math.round(kilograms)} kg`;
+  }
+
+  return `${Math.round(kilograms * 2.20462)} lb`;
+}
+
 
 export default function PlayerPerformance() {
   const navigate = useNavigate();
+  const { units } = useThemePreferences();
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -736,7 +765,7 @@ export default function PlayerPerformance() {
                 <Download className="w-4 h-4 mr-2" />
                 Export
               </Button>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={() => navigate("/settings")}>
                 <Settings className="w-4 h-4" />
               </Button>
             </div>
@@ -933,8 +962,9 @@ export default function PlayerPerformance() {
                       {selectedPlayer.position}
                     </Badge>
                     <p className="text-sm text-gray-600">
-                      {selectedPlayer.age}y • {selectedPlayer.height} •{" "}
-                      {selectedPlayer.weight}
+                      {selectedPlayer.age}y •{" "}
+                      {formatHeight(selectedPlayer.height, units)} •{" "}
+                      {formatWeight(selectedPlayer.weight, units)}
                     </p>
                   </div>
 

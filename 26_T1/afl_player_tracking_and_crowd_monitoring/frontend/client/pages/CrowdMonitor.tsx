@@ -226,13 +226,7 @@ export default function CrowdMonitor() {
               Stadium crowd density and safety analytics
             </p>
           </div>
-          {/* Live Clock */}
-            <LiveClock
-              isLive={isLive}
-              onToggleLive={setIsLive}
-              matchTime={{ quarter: 2, timeRemaining: "15:23" }}
-            />
-
+          
           {/* Overview Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>

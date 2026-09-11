@@ -7,6 +7,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Login from "./pages/Login";
 import PageSkeleton from "@/components/PageSkeleton";
+import { ThemePreferencesProvider } from "@/components/ThemePreferences";
+import ProtectedRoute from "@/components/ProtectedRoute";
 
 const Index = lazy(() => import("./pages/Index"));
 const AFLDashboard = lazy(() => import("./pages/AFLDashboard"));
@@ -19,6 +21,7 @@ const ErrorDemo = lazy(() => import("./pages/ErrorDemo"));
 const About = lazy(() => import("./pages/About"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const AddPlayer = lazy(() => import("./pages/AddPlayer"));
+const Settings = lazy(() => import("./pages/Settings"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -71,6 +74,7 @@ export default function App() {
       }}
     >
       <QueryClientProvider client={queryClient}>
+        <ThemePreferencesProvider>
         <TooltipProvider>
           <Toaster />
           <Sonner />
@@ -89,6 +93,7 @@ export default function App() {
                 <Route path="/about" element={<About />} />
                 <Route path="/error-demo" element={<ErrorDemo />} />
                 <Route path="/add-player" element={<AddPlayer />} />
+                <Route path="/settings"  element={<ProtectedRoute><Settings /></ProtectedRoute>}/>
                 <Route path="/stitch" element={<Index />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
@@ -96,6 +101,7 @@ export default function App() {
             </Suspense>
           </BrowserRouter>
         </TooltipProvider>
+        </ThemePreferencesProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );
