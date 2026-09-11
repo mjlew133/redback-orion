@@ -74,6 +74,11 @@ class Track:
                 "time_sec": float(time_sec),
                 "bbox": [float(v) for v in self.bbox],
                 "center": [float(self.center[0]), float(self.center[1])],
+                "ground_point": (
+                    [float(v) for v in detection["ground_point"]]
+                    if detection.get("ground_point") is not None
+                    else None
+                ),
                 "confidence": float(self.current_conf),
                 "detected_class_id": int(self.current_detected_class_id),
                 "detected_class_name": str(self.current_detected_class_name),

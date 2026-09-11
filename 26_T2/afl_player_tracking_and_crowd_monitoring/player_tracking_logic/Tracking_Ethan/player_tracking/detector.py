@@ -3,7 +3,7 @@ from typing import Dict, List
 import numpy as np
 
 from .appearance import extract_appearance_feature, extract_jersey_colour_feature
-from .geometry import bbox_center, euclidean_distance, iou_xyxy
+from .geometry import bbox_bottom_center, bbox_center, euclidean_distance, iou_xyxy
 
 
 def get_class_name_from_model(model, class_id: int) -> str:
@@ -53,11 +53,13 @@ def parse_yolo_detections(
         conf = float(box.conf.item()) if hasattr(box.conf, "item") else float(box.conf)
         xyxy = box.xyxy[0].detach().cpu().numpy().astype(float).tolist()
         center = bbox_center(xyxy)
+        ground_point = bbox_bottom_center(xyxy)
 
         detections.append(
             {
                 "bbox": xyxy,
                 "center": center,
+                "ground_point": ground_point,
                 "conf": conf,
                 # "class_id": class_id,
                 "class_id": 0,
