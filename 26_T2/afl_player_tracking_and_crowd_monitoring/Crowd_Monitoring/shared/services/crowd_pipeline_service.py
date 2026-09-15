@@ -1,5 +1,7 @@
 """End-to-end service flow for the full crowd monitoring pipeline."""
 
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,6 +12,16 @@ from crowd_allocation_risk_zone.main import assess_risk
 from crowd_behaviour_analytics.main import analyze_behaviour
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+@contextmanager
+def _timed(label, sink):
+    """Record wall time for one pipeline stage into sink[label] (ms) and log it."""
+    start = time.perf_counter()
+    yield
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    sink[label] = round(elapsed_ms, 1)
+    print(f"[pipeline] {label:<10} {elapsed_ms / 1000:6.2f}s")
 
 
 def _safe_round(value, digits=2):
@@ -160,8 +172,12 @@ def _build_density_extremes(analytics_result: dict, risk_result: dict) -> dict:
 
 def process_crowd_detection(data: dict):
     """Run detection, analytics, and intelligence as one frontend-facing flow."""
-    detection_result = process_detection(data)
-    analytics_result = process_analytics(detection_result)
+    timings: dict[str, float] = {}
+
+    with _timed("detection", timings):
+        detection_result = process_detection(data)
+    with _timed("analytics", timings):
+        analytics_result = process_analytics(detection_result)
 
     intelligence_input = {
         "video_id": data.get("video_id"),
@@ -169,15 +185,22 @@ def process_crowd_detection(data: dict):
         "heatmap": analytics_result.get("heatmap", {}),
         "frames": detection_result.get("frames", []),
     }
-    behaviour_result = analyze_behaviour(intelligence_input)
-    risk_result = assess_risk(behaviour_result)
+    with _timed("behaviour", timings):
+        behaviour_result = analyze_behaviour(intelligence_input)
+    with _timed("risk", timings):
+        risk_result = assess_risk(behaviour_result)
 
-    return {
-        "video_id": data.get("video_id"),
-        "summary": _build_summary(detection_result, behaviour_result, risk_result, analytics_result),
-        "peak_crowd_frame": _build_peak_crowd_frame(detection_result),
-        "anomaly_visual": _build_anomaly_visual(behaviour_result),
-        "heatmap": analytics_result.get("heatmap", {}),
-        "time_series_chart": _build_time_series_chart(detection_result, behaviour_result, data.get("video_id")),
-        "density_extremes": _build_density_extremes(analytics_result, risk_result),
-    }
+    with _timed("assemble", timings):
+        payload = {
+            "video_id": data.get("video_id"),
+            "summary": _build_summary(detection_result, behaviour_result, risk_result, analytics_result),
+            "peak_crowd_frame": _build_peak_crowd_frame(detection_result),
+            "anomaly_visual": _build_anomaly_visual(behaviour_result),
+            "heatmap": analytics_result.get("heatmap", {}),
+            "time_series_chart": _build_time_series_chart(detection_result, behaviour_result, data.get("video_id")),
+            "density_extremes": _build_density_extremes(analytics_result, risk_result),
+        }
+
+    print(f"[pipeline] {'TOTAL':<10} {sum(timings.values()) / 1000:6.2f}s  {timings}")
+    payload["stage_timings_ms"] = timings
+    return payload
