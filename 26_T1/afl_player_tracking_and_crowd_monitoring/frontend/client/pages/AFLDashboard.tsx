@@ -1699,6 +1699,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
   type="button"
   variant="outline"
   size="sm"
+  onClick={() => navigate("/settings")}
   className="hidden items-center gap-2 lg:inline-flex"
 >
   <Settings className="h-4 w-4" />
