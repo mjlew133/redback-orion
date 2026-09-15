@@ -21,6 +21,7 @@ const ErrorDemo = lazy(() => import("./pages/ErrorDemo"));
 const About = lazy(() => import("./pages/About"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const AddPlayer = lazy(() => import("./pages/AddPlayer"));
+const Profile = lazy(() => import("./pages/Profile"));
 const Settings = lazy(() => import("./pages/Settings"));
 
 const queryClient = new QueryClient({
@@ -93,7 +94,22 @@ export default function App() {
                 <Route path="/about" element={<About />} />
                 <Route path="/error-demo" element={<ErrorDemo />} />
                 <Route path="/add-player" element={<AddPlayer />} />
-                <Route path="/settings"  element={<ProtectedRoute><Settings /></ProtectedRoute>}/>
+                <Route
+                path="/profile"
+                element={
+                  <ProtectedRoute>
+                    <Profile />
+                  </ProtectedRoute>
+                }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <ProtectedRoute>
+                      <Settings />
+                    </ProtectedRoute>
+                  }
+                />
                 <Route path="/stitch" element={<Index />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
