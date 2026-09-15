@@ -82,8 +82,7 @@ import {
   Shield,
 } from "lucide-react";
 import MobileNavigation from "@/components/MobileNavigation";
-
-const BACKEND_URL = "http://localhost:8000";
+import { BACKEND_URL } from "../lib/config";
 
 type BackendStatusResponse = {
   job_id: string;
@@ -97,59 +96,67 @@ type BackendStatusResponse = {
 };
 
 const getAccessToken = () =>
-  localStorage.getItem("accessToken") || localStorage.getItem("authToken");
+  localStorage.getItem("accessToken") ||
+  localStorage.getItem("access_token") ||
+  localStorage.getItem("authToken");
 
-// Mock data for the dashboard
-const mockPlayers = [
-  {
-    id: 1,
-    name: "Marcus Bontempelli",
-    team: "Western Bulldogs",
-    position: "Midfielder",
-    kicks: 28,
-    handballs: 12,
-    marks: 8,
-    tackles: 6,
-    goals: 2,
-    efficiency: 87,
-  },
-  {
-    id: 2,
-    name: "Dustin Martin",
-    team: "Richmond",
-    position: "Forward",
-    kicks: 22,
-    handballs: 8,
-    marks: 6,
-    tackles: 4,
-    goals: 3,
-    efficiency: 82,
-  },
-  {
-    id: 3,
-    name: "Patrick Dangerfield",
-    team: "Geelong",
-    position: "Midfielder",
-    kicks: 25,
-    handballs: 15,
-    marks: 7,
-    tackles: 8,
-    goals: 1,
-    efficiency: 84,
-  },
-  {
-    id: 4,
-    name: "Max Gawn",
-    team: "Melbourne",
-    position: "Ruckman",
-    kicks: 18,
-    handballs: 6,
-    marks: 10,
-    tackles: 3,
-    goals: 1,
-    efficiency: 78,
-  },
-];
+type DashboardPlayer = {
+  id: number;
+  name: string;
+  team: string;
+  position: string;
+  number: number;
+  fieldX: number;
+  fieldY: number;
+  kicks: number;
+  handballs: number;
+  marks: number;
+  tackles: number;
+  goals: number;
+  efficiency: number;
+};
+
+const getFieldPositionForRole = (position: string) => {
+  const role = position.trim().toLowerCase();
+
+  if (role.includes("forward")) {
+    return { fieldX: 50, fieldY: 24 };
+  }
+
+  if (role.includes("defender") || role.includes("back")) {
+    return { fieldX: 50, fieldY: 76 };
+  }
+
+  if (role.includes("ruck")) {
+    return { fieldX: 50, fieldY: 50 };
+  }
+
+  if (role.includes("mid") || role.includes("wing")) {
+    return { fieldX: 50, fieldY: 50 };
+  }
+
+  return { fieldX: 50, fieldY: 50 };
+};
+
+const normalizeDatabasePlayer = (player: any): DashboardPlayer => {
+  const fieldPosition = getFieldPositionForRole(player.position || "");
+
+  return {
+    id: Number(player.id),
+    name: player.name || "",
+    team: player.team || "",
+    position: player.position || "",
+    number: Number(player.jersey_number ?? player.jerseyNumber ?? 0),
+    fieldX: fieldPosition.fieldX,
+    fieldY: fieldPosition.fieldY,
+    kicks: Number(player.kicks ?? 0),
+    handballs: Number(player.handballs ?? 0),
+    marks: Number(player.marks ?? 0),
+    tackles: Number(player.tackles ?? 0),
+    goals: Number(player.goals ?? 0),
+    efficiency: Number(player.efficiency ?? 0),
+  };
+};
 
 const matchEvents = [
   {
@@ -242,13 +249,66 @@ const BackToTopButton = () => {
 };
 export default function AFLDashboard() {
   const navigate = useNavigate();
-  const [selectedPlayer, setSelectedPlayer] = useState(mockPlayers[0]);
-  const [comparisonPlayer, setComparisonPlayer] = useState(mockPlayers[1]);
+  const [players, setPlayers] = useState<DashboardPlayer[]>([]);
+  const [selectedPlayer, setSelectedPlayer] = useState<DashboardPlayer | null>(null);
+  const [comparisonPlayer, setComparisonPlayer] = useState<DashboardPlayer | null>(null);
+  const [playersLoading, setPlayersLoading] = useState(true);
+  const [playersError, setPlayersError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [isLive, setIsLive] = useState(true);
   const [userEmail, setUserEmail] = useState("");
   const [activeQueueItemId, setActiveQueueItemId] = useState<string | null>(null);
+
+  const loadDatabasePlayers = async () => {
+    setPlayersLoading(true);
+    setPlayersError(null);
+
+    try {
+      const token = getAccessToken();
+
+      const response = await fetch(`${BACKEND_URL}/api/players`, {
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const data = await response.json().catch(() => []);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ||
+            data?.message ||
+            `Unable to load players (${response.status})`,
+        );
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error("Player API returned an unexpected response.");
+      }
+
+      const databasePlayers = data.map(normalizeDatabasePlayer);
+
+      setPlayers(databasePlayers);
+      setSelectedPlayer(databasePlayers[0] ?? null);
+      setComparisonPlayer(databasePlayers[1] ?? databasePlayers[0] ?? null);
+    } catch (error) {
+      console.error("Failed to load database players:", error);
+      setPlayers([]);
+      setSelectedPlayer(null);
+      setComparisonPlayer(null);
+      setPlayersError(
+        error instanceof Error ? error.message : "Unable to load players.",
+      );
+    } finally {
+      setPlayersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDatabasePlayers();
+  }, []);
 
   // Feature flag to disable live match features
   const ENABLE_LIVE_FEATURES = false;
@@ -429,8 +489,11 @@ useEffect(() => {
           setCurrentJobId(null);
           setIsVideoAnalyzing(false);
           setVideoAnalysisComplete(data.status === "done" || data.status === "partial");
-                    if (data.error) {
+          if (data.error) {
             setVideoAnalysisError(data.error);
+          }
+          if (data.results?.crowd) {
+            navigate(`/crowd-monitor?jobId=${encodeURIComponent(data.job_id)}`);
           }
         }
       } catch (error) {
@@ -859,20 +922,14 @@ useEffect(() => {
 
   // Logout function
   const handleLogout = () => {
-    const AUTH_KEYS = [
-      "isAuthenticated",
-      "userEmail",
-      "userName",
-      "authToken",
-      "authProvider",
-      "access_token",
-      "refresh_token",
-      "accessToken",
-      "refreshToken",
-      "loggedInUser",
-    ];
-    AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
-    navigate("/login", { replace: true });
+    localStorage.removeItem("isAuthenticated");
+    localStorage.removeItem("userEmail");
+    localStorage.removeItem("userName");
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("refreshToken");
+    localStorage.removeItem("loggedInUser");
+    navigate("/");
   };
 
   // Video upload handlers
@@ -1182,246 +1239,227 @@ useEffect(() => {
     return { playerStats, crowdDensity };
   };
 
-  //make the report use real data instead of fake players 
+  // Simulate getting JSON data from backend
   const fetchBackendAnalysisData = async (analysisId: string) => {
-    const token = getAccessToken();
-    if (!token) {
-      throw new Error("Please sign in again before downloading a report");
-    }
-
-    const response = await fetch(`${BACKEND_URL}/api/analytics/latest`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}) as any);
-      throw new Error(
-        body.detail || "Could not load your analysis results from the backend",
-      );
-    }
-
-    return response.json();
+    // Simulate backend JSON response
+    return {
+      analysisId,
+      timestamp: new Date().toISOString(),
+      videoFile: {
+        name: selectedVideoFile?.name || "sample_video.mp4",
+        duration: "02:15:30",
+        size: "1.8 GB",
+        resolution: "1920x1080",
+        framerate: "30fps",
+      },
+      analysisType: selectedAnalysisType,
+      focusAreas: selectedFocusAreas,
+      processingTime: Math.floor(Math.random() * 300 + 120),
+      results: {
+        playerPerformance: [
+          {
+            playerId: "p001",
+            name: "Marcus Bontempelli",
+            team: "Western Bulldogs",
+            position: "Midfielder",
+            statistics: {
+              speed: { max: 32.4, average: 24.8, unit: "km/h" },
+              distance: { total: 12.8, sprints: 2.3, unit: "km" },
+              touches: { total: 28, effective: 24, efficiency: 85.7 },
+              goals: 2,
+              assists: 3,
+              tackles: 6,
+              marks: 8,
+              disposals: 31,
+              timeOnGround: 87.5,
+            },
+          },
+          {
+            playerId: "p002",
+            name: "Patrick Cripps",
+            team: "Carlton",
+            position: "Midfielder",
+            statistics: {
+              speed: { max: 29.8, average: 22.1, unit: "km/h" },
+              distance: { total: 13.2, sprints: 1.8, unit: "km" },
+              touches: { total: 35, effective: 31, efficiency: 88.6 },
+              goals: 1,
+              assists: 5,
+              tackles: 9,
+              marks: 6,
+              disposals: 34,
+              timeOnGround: 92.3,
+            },
+          },
+        ],
+        crowdAnalysis: {
+          totalAttendance: 47832,
+          capacity: 50000,
+          utilizationRate: 95.7,
+          sections: [
+            {
+              sectionId: "north_stand",
+              name: "Northern Stand",
+              attendance: 14250,
+              capacity: 15000,
+              density: 95.0,
+              noiseLevel: { peak: 95.2, average: 78.4, unit: "dB" },
+            },
+            {
+              sectionId: "south_stand",
+              name: "Southern Stand",
+              attendance: 11680,
+              capacity: 12000,
+              density: 97.3,
+              noiseLevel: { peak: 92.8, average: 76.9, unit: "dB" },
+            },
+          ],
+        },
+        highlights: [
+          {
+            timestamp: "00:03:45",
+            duration: 15,
+            type: "goal",
+            description: "Opening goal with crowd eruption",
+            players: ["Marcus Bontempelli"],
+            confidence: 0.94,
+          },
+        ],
+        metadata: {
+          confidence: 0.923,
+          processingVersion: "2.1.3",
+          qualityScore: 8.7,
+        },
+      },
+    };
   };
 
-//   // Convert backend JSON to formatted text
-//   const convertBackendDataToText = (data: any) => {
-//     return `AFL VIDEO ANALYSIS REPORT
-// Generated: ${new Date(data.timestamp).toLocaleString()}
-// Analysis ID: ${data.analysisId}
-
-// VIDEO INFORMATION
-// ================
-// File: ${data.videoFile.name}
-// Duration: ${data.videoFile.duration}
-// Size: ${data.videoFile.size}
-// Resolution: ${data.videoFile.resolution}
-// Processing Time: ${data.processingTime} seconds
-
-// PLAYER PERFORMANCE
-// ==================
-// ${data.results.playerPerformance
-//   .map(
-//     (player: any) => `
-// ${player.name} (${player.team} - ${player.position})
-// - Max Speed: ${player.statistics.speed.max} ${player.statistics.speed.unit}
-// - Average Speed: ${player.statistics.speed.average} ${player.statistics.speed.unit}
-// - Total Distance: ${player.statistics.distance.total} ${player.statistics.distance.unit}
-// - Goals: ${player.statistics.goals} | Assists: ${player.statistics.assists}
-// - Tackles: ${player.statistics.tackles} | Marks: ${player.statistics.marks}
-// - Disposals: ${player.statistics.disposals} | Efficiency: ${player.statistics.touches.efficiency}%
-// - Time on Ground: ${player.statistics.timeOnGround}%
-// `,
-//   )
-//   .join("\n")}
-
-// CROWD ANALYSIS
-// ==============
-// Total Attendance: ${data.results.crowdAnalysis.totalAttendance.toLocaleString()}
-// Stadium Utilization: ${data.results.crowdAnalysis.utilizationRate}%
-
-// ${data.results.crowdAnalysis.sections
-//   .map(
-//     (section: any) => `
-// ${section.name}: ${section.attendance.toLocaleString()} / ${section.capacity.toLocaleString()} (${section.density}%)
-// Peak Noise: ${section.noiseLevel.peak} ${section.noiseLevel.unit}
-// `,
-//   )
-//   .join("")}
-
-// HIGHLIGHTS
-// ==========
-// ${data.results.highlights
-//   .map(
-//     (highlight: any) =>
-//       `${highlight.timestamp} - ${highlight.type.toUpperCase()}: ${highlight.description} (${Math.round(highlight.confidence * 100)}% confidence)`,
-//   )
-//   .join("\n")}
-
-// TECHNICAL METADATA
-// ==================
-// Overall Confidence: ${Math.round(data.results.metadata.confidence * 100)}%
-// Quality Score: ${data.results.metadata.qualityScore}/10
-// Processing Version: ${data.results.metadata.processingVersion}
-
-// Report generated by AFL Analytics Platform
-// `;
-//   };
-
-//   // Convert backend JSON to HTML for PDF
-//   const convertBackendDataToHTML = (data: any) => {
-//     return `
-//       <div class="section">
-//         <h1>AFL Video Analysis Report</h1>
-//         <div class="metric">
-//           <strong>Generated:</strong> ${new Date(data.timestamp).toLocaleString()}<br>
-//           <strong>Analysis ID:</strong> ${data.analysisId}<br>
-//           <strong>Video File:</strong> ${data.videoFile.name}<br>
-//           <strong>Duration:</strong> ${data.videoFile.duration}<br>
-//           <strong>Processing Time:</strong> ${data.processingTime} seconds
-//         </div>
-//       </div>
-
-//       <div class="section">
-//         <h2>Player Performance Analysis</h2>
-//         <div class="player-grid">
-//           ${data.results.playerPerformance
-//             .map(
-//               (player: any) => `
-//             <div class="player-card">
-//               <h3 style="margin: 0 0 8px 0; color: #059669;">${player.name}</h3>
-//               <div class="player-team">${player.team} - ${player.position}</div>
-//               <div><strong>Max Speed:</strong> ${player.statistics.speed.max} ${player.statistics.speed.unit}</div>
-//               <div><strong>Distance:</strong> ${player.statistics.distance.total} ${player.statistics.distance.unit}</div>
-//               <div><strong>Goals:</strong> ${player.statistics.goals} | <strong>Assists:</strong> ${player.statistics.assists}</div>
-//               <div><strong>Efficiency:</strong> ${player.statistics.touches.efficiency}%</div>
-//             </div>
-//           `,
-//             )
-//             .join("")}
-//         </div>
-//       </div>
-
-//       <div class="section">
-//         <h2>Crowd Analysis</h2>
-//         <div class="metric">
-//           <strong>Total Attendance:</strong> ${data.results.crowdAnalysis.totalAttendance.toLocaleString()}<br>
-//           <strong>Utilization Rate:</strong> ${data.results.crowdAnalysis.utilizationRate}%
-//         </div>
-//         ${data.results.crowdAnalysis.sections
-//           .map(
-//             (section: any) => `
-//           <div class="crowd-item">
-//             <strong>${section.name}:</strong> ${section.attendance.toLocaleString()} / ${section.capacity.toLocaleString()} (${section.density}%)<br>
-//             Peak Noise: ${section.noiseLevel.peak} ${section.noiseLevel.unit}
-//           </div>
-//         `,
-//           )
-//           .join("")}
-//       </div>
-
-//       <div class="section">
-//         <h2>Technical Information</h2>
-//         <div class="metric">
-//           <strong>Analysis Confidence:</strong> ${Math.round(data.results.metadata.confidence * 100)}%<br>
-//           <strong>Quality Score:</strong> ${data.results.metadata.qualityScore}/10<br>
-//           <strong>Processing Version:</strong> ${data.results.metadata.processingVersion}
-//         </div>
-//       </div>
-//     `;
-//   };
+  // Convert backend JSON to formatted text
   const convertBackendDataToText = (data: any) => {
-    const created = data.created_at
-      ? new Date(data.created_at).toLocaleString()
-      : "Unknown";
-    const player = data.player;
-    const crowd = data.crowd;
-
-    const playerSection = player
-      ? `PLAYER TRACKING
-================
-Frames with tracking: ${player.tracking.frames_with_tracking}
-Unique players detected: ${player.tracking.unique_player_ids}
-Total player detections: ${player.tracking.total_player_detections}
-Average players per frame: ${player.tracking.average_players_per_frame}
-Peak players in a single frame: ${player.tracking.peak_players_in_frame}
-Formations detected: ${player.formation.count}
-Tackles detected: ${player.tackles.count}`
-      : "No player-tracking results were returned for this video.";
-
-    const crowdSection = crowd
-      ? `CROWD MONITORING
-================
-Frames processed: ${crowd.total_frames_processed}
-Peak person count: ${crowd.peak_person_count}
-Crowd state: ${crowd.crowd_state}
-Highest density zone: ${crowd.highest_density_zone}
-Highest risk zone: ${crowd.highest_risk_zone}`
-      : "No crowd-monitoring results were returned for this video.";
-
     return `AFL VIDEO ANALYSIS REPORT
-Generated: ${new Date().toLocaleString()}
-Job ID: ${data.job_id}
-Job Status: ${data.status}
-Analysis Completed: ${created}
+Generated: ${new Date(data.timestamp).toLocaleString()}
+Analysis ID: ${data.analysisId}
 
-${playerSection}
+VIDEO INFORMATION
+================
+File: ${data.videoFile.name}
+Duration: ${data.videoFile.duration}
+Size: ${data.videoFile.size}
+Resolution: ${data.videoFile.resolution}
+Processing Time: ${data.processingTime} seconds
 
-${crowdSection}
-${data.error ? `\nNOTES\n=====\n${data.error}\n` : ""}
-Report generated by AFL Analytics Platform from real backend analysis data.
+PLAYER PERFORMANCE
+==================
+${data.results.playerPerformance
+  .map(
+    (player: any) => `
+${player.name} (${player.team} - ${player.position})
+- Max Speed: ${player.statistics.speed.max} ${player.statistics.speed.unit}
+- Average Speed: ${player.statistics.speed.average} ${player.statistics.speed.unit}
+- Total Distance: ${player.statistics.distance.total} ${player.statistics.distance.unit}
+- Goals: ${player.statistics.goals} | Assists: ${player.statistics.assists}
+- Tackles: ${player.statistics.tackles} | Marks: ${player.statistics.marks}
+- Disposals: ${player.statistics.disposals} | Efficiency: ${player.statistics.touches.efficiency}%
+- Time on Ground: ${player.statistics.timeOnGround}%
+`,
+  )
+  .join("\n")}
+
+CROWD ANALYSIS
+==============
+Total Attendance: ${data.results.crowdAnalysis.totalAttendance.toLocaleString()}
+Stadium Utilization: ${data.results.crowdAnalysis.utilizationRate}%
+
+${data.results.crowdAnalysis.sections
+  .map(
+    (section: any) => `
+${section.name}: ${section.attendance.toLocaleString()} / ${section.capacity.toLocaleString()} (${section.density}%)
+Peak Noise: ${section.noiseLevel.peak} ${section.noiseLevel.unit}
+`,
+  )
+  .join("")}
+
+HIGHLIGHTS
+==========
+${data.results.highlights
+  .map(
+    (highlight: any) =>
+      `${highlight.timestamp} - ${highlight.type.toUpperCase()}: ${highlight.description} (${Math.round(highlight.confidence * 100)}% confidence)`,
+  )
+  .join("\n")}
+
+TECHNICAL METADATA
+==================
+Overall Confidence: ${Math.round(data.results.metadata.confidence * 100)}%
+Quality Score: ${data.results.metadata.qualityScore}/10
+Processing Version: ${data.results.metadata.processingVersion}
+
+Report generated by AFL Analytics Platform
 `;
   };
 
+  // Convert backend JSON to HTML for PDF
   const convertBackendDataToHTML = (data: any) => {
-    const created = data.created_at
-      ? new Date(data.created_at).toLocaleString()
-      : "Unknown";
-    const player = data.player;
-    const crowd = data.crowd;
-
-    const playerHtml = player
-      ? `
-      <div class="section">
-        <h2>Player Tracking</h2>
-        <div class="metric">
-          <strong>Frames with tracking:</strong> ${player.tracking.frames_with_tracking}<br>
-          <strong>Unique players detected:</strong> ${player.tracking.unique_player_ids}<br>
-          <strong>Total player detections:</strong> ${player.tracking.total_player_detections}<br>
-          <strong>Formations detected:</strong> ${player.formation.count}<br>
-          <strong>Tackles detected:</strong> ${player.tackles.count}
-        </div>
-      </div>
-    `
-      : `<div class="section"><p>No player-tracking results were returned for this video.</p></div>`;
-
-    const crowdHtml = crowd
-      ? `
-      <div class="section">
-        <h2>Crowd Monitoring</h2>
-        <div class="metric">
-          <strong>Frames processed:</strong> ${crowd.total_frames_processed}<br>
-          <strong>Peak person count:</strong> ${crowd.peak_person_count}<br>
-          <strong>Crowd state:</strong> ${crowd.crowd_state}<br>
-          <strong>Highest risk zone:</strong> ${crowd.highest_risk_zone}
-        </div>
-      </div>
-    `
-      : `<div class="section"><p>No crowd-monitoring results were returned for this video.</p></div>`;
-
     return `
       <div class="section">
         <h1>AFL Video Analysis Report</h1>
         <div class="metric">
-          <strong>Job ID:</strong> ${data.job_id}<br>
-          <strong>Status:</strong> ${data.status}<br>
-          <strong>Analysis Completed:</strong> ${created}
+          <strong>Generated:</strong> ${new Date(data.timestamp).toLocaleString()}<br>
+          <strong>Analysis ID:</strong> ${data.analysisId}<br>
+          <strong>Video File:</strong> ${data.videoFile.name}<br>
+          <strong>Duration:</strong> ${data.videoFile.duration}<br>
+          <strong>Processing Time:</strong> ${data.processingTime} seconds
         </div>
       </div>
-      ${playerHtml}
-      ${crowdHtml}
+
+      <div class="section">
+        <h2>Player Performance Analysis</h2>
+        <div class="player-grid">
+          ${data.results.playerPerformance
+            .map(
+              (player: any) => `
+            <div class="player-card">
+              <h3 style="margin: 0 0 8px 0; color: #059669;">${player.name}</h3>
+              <div class="player-team">${player.team} - ${player.position}</div>
+              <div><strong>Max Speed:</strong> ${player.statistics.speed.max} ${player.statistics.speed.unit}</div>
+              <div><strong>Distance:</strong> ${player.statistics.distance.total} ${player.statistics.distance.unit}</div>
+              <div><strong>Goals:</strong> ${player.statistics.goals} | <strong>Assists:</strong> ${player.statistics.assists}</div>
+              <div><strong>Efficiency:</strong> ${player.statistics.touches.efficiency}%</div>
+            </div>
+          `,
+            )
+            .join("")}
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Crowd Analysis</h2>
+        <div class="metric">
+          <strong>Total Attendance:</strong> ${data.results.crowdAnalysis.totalAttendance.toLocaleString()}<br>
+          <strong>Utilization Rate:</strong> ${data.results.crowdAnalysis.utilizationRate}%
+        </div>
+        ${data.results.crowdAnalysis.sections
+          .map(
+            (section: any) => `
+          <div class="crowd-item">
+            <strong>${section.name}:</strong> ${section.attendance.toLocaleString()} / ${section.capacity.toLocaleString()} (${section.density}%)<br>
+            Peak Noise: ${section.noiseLevel.peak} ${section.noiseLevel.unit}
+          </div>
+        `,
+          )
+          .join("")}
+      </div>
+
+      <div class="section">
+        <h2>Technical Information</h2>
+        <div class="metric">
+          <strong>Analysis Confidence:</strong> ${Math.round(data.results.metadata.confidence * 100)}%<br>
+          <strong>Quality Score:</strong> ${data.results.metadata.qualityScore}/10<br>
+          <strong>Processing Version:</strong> ${data.results.metadata.processingVersion}
+        </div>
+      </div>
     `;
   };
-//1332 - 1423 updated report based on the video 
 
   // Download handlers for reports with backend JSON processing
   const handleDownloadReport = async (
@@ -1460,11 +1498,7 @@ Report generated by AFL Analytics Platform from real backend analysis data.
       }
     } catch (error) {
       console.error("Error generating report:", error);
-      alert(
-        error instanceof Error
-          ? error.message
-          : "Failed to generate report. Please try again.",
-      );
+      alert("Failed to generate report. Please try again.");
     }
   };
 
@@ -1597,84 +1631,232 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
     downloadText(clipsData, `AFL_Video_Clips_${Date.now()}`);
   };
 
-  const filteredPlayers = mockPlayers.filter(
+  const filteredPlayers = players.filter(
     (player) =>
       player.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
       (selectedTeam === "all" || player.team === selectedTeam),
   );
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50">
-      <MobileNavigation />
+  // Field display is intentionally search-driven:
+  // no player marker is shown until the user searches for a player.
+  const normalizedPlayerSearch = searchTerm.trim().toLowerCase();
 
-      <div className="lg:ml-64 pb-16 lg:pb-0">
-        <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-30">
-          <div className="container mx-auto px-4 py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-blue-600 rounded-lg flex items-center justify-center">
-                  <Activity className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                    AFL Analytics
-                  </h1>
-                  <p className="text-sm text-gray-600">
-                    Real-time match insights & player analytics
-                  </p>
-                </div>
+  const searchedFieldPlayers = normalizedPlayerSearch
+    ? players.filter((player) =>
+        player.name.toLowerCase().includes(normalizedPlayerSearch),
+      )
+    : [];
+
+  return (
+  <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50">
+    <MobileNavigation />
+
+    <div className="lg:ml-64 pb-16 lg:pb-0">
+      <header className="sticky top-0 z-30 border-b bg-white/80 backdrop-blur-sm">
+        <div className="container mx-auto px-4 py-4">
+         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            {/* Logo and title */}
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-green-600 to-blue-600">
+                <Activity className="h-6 w-6 text-white" />
               </div>
-              <div className="flex items-center space-x-4">
-                 {userEmail && (
-                  <span className="text-sm text-gray-600 hidden sm:block">
-                    Welcome, {userEmail}
-                  </span>
-                )}
-                <Button variant="outline" size="sm"onClick={() => navigate("/settings")} >
-                  <Settings className="w-4 h-4 mr-2" />   Settings
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleLogout}>
-                  <LogOut className="w-4 h-4 mr-2" />
-                  Logout
-                </Button>
+
+              <div className="min-w-0">
+                <h1 className="bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-xl font-bold text-transparent sm:text-2xl">
+                  AFL Analytics
+                </h1>
+
+                <p className="text-xs text-gray-600 sm:text-sm">
+                  Real-time match insights &amp; player analytics
+                </p>
               </div>
             </div>
-          </div>
-        </header>
 
-        <div className="container mx-auto px-4 py-6">
-          <Tabs defaultValue="video" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger
-              value="performance"
-              className="flex items-center gap-2"
-            >
-              <BarChart3 className="w-4 h-4" />
-              Player Performance
-            </TabsTrigger>
-            {ENABLE_LIVE_FEATURES && (
-              <TabsTrigger value="match" className="flex items-center gap-2">
-                <Activity className="w-4 h-4" />
-                Live Match
-              </TabsTrigger>
-            )}
-            <TabsTrigger value="crowd" className="flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              Crowd Monitor
-            </TabsTrigger>
-            <TabsTrigger value="reports" className="flex items-center gap-2">
-              <Download className="w-4 h-4" />
-              Reports
-            </TabsTrigger>
-            <TabsTrigger value="video" className="flex items-center gap-2">
-              <Video className="w-4 h-4" />
-              Video Analysis
-            </TabsTrigger>
-          </TabsList>
+            {/* Live, Settings and Logout */}
+            <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-start sm:gap-5">
+              <Badge
+                variant={isLive ? "destructive" : "secondary"}
+                className="shrink-0 px-3 py-1"
+              >
+                <span
+                  className={`mr-2 h-2 w-2 rounded-full ${
+                    isLive
+                      ? "animate-pulse bg-white"
+                      : "bg-gray-500"
+                  }`}
+                />
+
+                {isLive ? "LIVE" : "OFFLINE"}
+              </Badge>
+
+              {userEmail && (
+                <span className="hidden whitespace-nowrap text-sm text-gray-600 xl:block">
+                  Welcome, {userEmail}
+                </span>
+              )}
+
+              <Button
+  type="button"
+  variant="outline"
+  size="sm"
+  className="hidden items-center gap-2 lg:inline-flex"
+>
+  <Settings className="h-4 w-4" />
+  <span>Settings</span>
+</Button>
+
+<Button
+  type="button"
+  variant="outline"
+  size="sm"
+  onClick={handleLogout}
+  className="hidden items-center gap-2 lg:inline-flex"
+>
+  <LogOut className="h-4 w-4" />
+  <span>Logout</span>
+</Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+
+
+       <div className="container mx-auto px-4 py-6">
+  <Tabs defaultValue="video" className="space-y-6">
+    <TabsList className="grid h-auto w-full grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1 md:grid-cols-4">
+
+  <TabsTrigger
+    value="performance"
+    className="
+      flex min-h-10 items-center justify-center gap-2
+      whitespace-normal rounded-lg text-center
+      border border-transparent
+      transition-all duration-300 ease-in-out
+
+      hover:bg-green-100
+      hover:text-green-700
+      hover:border-green-300
+      hover:shadow-md
+      hover:-translate-y-0.5
+
+      data-[state=active]:bg-green-100
+      data-[state=active]:text-green-700
+      data-[state=active]:border-green-300
+      data-[state=active]:shadow-md
+    "
+  >
+    <BarChart3 className="h-4 w-4 shrink-0" />
+    <span>Players &amp; Positions</span>
+  </TabsTrigger>
+
+  <TabsTrigger
+    value="crowd"
+    className="
+      flex min-h-10 items-center justify-center gap-2
+      whitespace-normal rounded-lg text-center
+      border border-transparent
+      transition-all duration-300 ease-in-out
+
+      hover:bg-green-100
+      hover:text-green-700
+      hover:border-green-300
+      hover:shadow-md
+      hover:-translate-y-0.5
+
+      data-[state=active]:bg-green-100
+      data-[state=active]:text-green-700
+      data-[state=active]:border-green-300
+      data-[state=active]:shadow-md
+    "
+  >
+    <Users className="h-4 w-4 shrink-0" />
+    <span>Crowd Monitor</span>
+  </TabsTrigger>
+
+  <TabsTrigger
+    value="reports"
+    className="
+      flex min-h-10 items-center justify-center gap-2
+      whitespace-normal rounded-lg text-center
+      border border-transparent
+      transition-all duration-300 ease-in-out
+
+      hover:bg-green-100
+      hover:text-green-700
+      hover:border-green-300
+      hover:shadow-md
+      hover:-translate-y-0.5
+
+      data-[state=active]:bg-green-100
+      data-[state=active]:text-green-700
+      data-[state=active]:border-green-300
+      data-[state=active]:shadow-md
+    "
+  >
+    <Download className="h-4 w-4 shrink-0" />
+    <span>Reports</span>
+  </TabsTrigger>
+
+  <TabsTrigger
+    value="video"
+    className="
+      flex min-h-10 items-center justify-center gap-2
+      whitespace-normal rounded-lg text-center
+      border border-transparent
+      transition-all duration-300 ease-in-out
+
+      hover:bg-green-100
+      hover:text-green-700
+      hover:border-green-300
+      hover:shadow-md
+      hover:-translate-y-0.5
+
+      data-[state=active]:bg-green-100
+      data-[state=active]:text-green-700
+      data-[state=active]:border-green-300
+      data-[state=active]:shadow-md
+    "
+  >
+    <Video className="h-4 w-4 shrink-0" />
+    <span>Video Analysis</span>
+  </TabsTrigger>
+
+</TabsList>
+
 
           {/* Player Performance Tracker */}
           <TabsContent value="performance" className="space-y-6">
-            <div className="flex flex-col lg:flex-row gap-6">
+            {playersLoading ? (
+              <Card>
+                <CardContent className="py-12 text-center text-gray-600">
+                  Loading players from the database...
+                </CardContent>
+              </Card>
+            ) : playersError ? (
+              <Card>
+                <CardContent className="space-y-4 py-12 text-center">
+                  <p className="font-medium text-red-600">
+                    Unable to load database players
+                  </p>
+                  <p className="text-sm text-gray-600">{playersError}</p>
+                  <Button type="button" variant="outline" onClick={loadDatabasePlayers}>
+                    Try Again
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : players.length === 0 || !selectedPlayer || !comparisonPlayer ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <p className="font-medium text-gray-900">No players found</p>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Add players through the Add Player page. This dashboard only
+                    displays players stored in the database.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="flex flex-col lg:flex-row gap-6">
               {/* Search and Filters */}
               <Card className="lg:w-1/3">
                 <CardHeader>
@@ -1708,12 +1890,14 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Teams</SelectItem>
-                        <SelectItem value="Western Bulldogs">
-                          Western Bulldogs
-                        </SelectItem>
-                        <SelectItem value="Richmond">Richmond</SelectItem>
-                        <SelectItem value="Geelong">Geelong</SelectItem>
-                        <SelectItem value="Melbourne">Melbourne</SelectItem>
+                        {Array.from(new Set(players.map((player) => player.team)))
+                          .filter(Boolean)
+                          .sort()
+                          .map((team) => (
+                            <SelectItem key={team} value={team}>
+                              {team}
+                            </SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1727,11 +1911,14 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                             ? "border-blue-500 bg-blue-50"
                             : "border-gray-200 hover:border-gray-300"
                         }`}
-                        onClick={() => setSelectedPlayer(player)}
+                        onClick={() => {
+                          setSelectedPlayer(player);
+                          setSearchTerm(player.name);
+                        }}
                       >
                         <div className="font-medium">{player.name}</div>
                         <div className="text-sm text-gray-600">
-                          {player.team} &bull; {player.position}
+                          {player.team} ��� {player.position}
                         </div>
                         <div className="text-xs text-green-600 mt-1">
                           Efficiency: {player.efficiency}%
@@ -1742,8 +1929,159 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                 </CardContent>
               </Card>
 
-              {/* Player Statistics */}
+              {/* Player Statistics + Search-Driven Field Position */}
               <div className="lg:w-2/3 space-y-6">
+                {/* Live AFL Field Position */}
+                <Card className="overflow-hidden">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <MapPin className="h-5 w-5 text-green-600" />
+                          Player Field Position
+                        </CardTitle>
+                        <CardDescription className="mt-1">
+                          Search for a player to view their primary playing
+                          position on the field.
+                        </CardDescription>
+                      </div>
+
+                      {normalizedPlayerSearch &&
+                        searchedFieldPlayers.length > 0 && (
+                          <Badge
+                            variant="outline"
+                            className="w-fit border-green-200 bg-green-50 text-green-700"
+                          >
+                            {searchedFieldPlayers.length === 1
+                              ? `Showing: ${searchedFieldPlayers[0].name}`
+                              : `${searchedFieldPlayers.length} matching players`}
+                          </Badge>
+                        )}
+                    </div>
+                  </CardHeader>
+
+                  <CardContent>
+                    <div className="relative mx-auto aspect-[1.55/1] w-full max-w-4xl overflow-hidden rounded-[46%] border-[5px] border-green-800 bg-gradient-to-b from-green-500 via-green-600 to-green-700 shadow-inner">
+                      {/* Alternating grass stripes */}
+                      <div className="absolute inset-0 grid grid-cols-10 opacity-30">
+                        {Array.from({ length: 10 }).map((_, index) => (
+                          <div
+                            key={index}
+                            className={
+                              index % 2 === 0
+                                ? "bg-white/10"
+                                : "bg-black/5"
+                            }
+                          />
+                        ))}
+                      </div>
+
+                      {/* Boundary line */}
+                      <div className="absolute inset-[3%] rounded-[46%] border-2 border-white/90" />
+
+                      {/* Centre square */}
+                      <div className="absolute left-1/2 top-1/2 h-[31%] w-[26%] -translate-x-1/2 -translate-y-1/2 border-2 border-white/90" />
+
+                      {/* Centre circle */}
+                      <div className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/90 sm:h-14 sm:w-14 lg:h-16 lg:w-16" />
+
+                      {/* 50 metre arcs */}
+                      <div className="absolute left-1/2 top-[4%] h-[32%] w-[58%] -translate-x-1/2 rounded-b-[50%] border-b-2 border-l-2 border-r-2 border-white/90" />
+                      <div className="absolute bottom-[4%] left-1/2 h-[32%] w-[58%] -translate-x-1/2 rounded-t-[50%] border-l-2 border-r-2 border-t-2 border-white/90" />
+
+                      {/* Goal squares */}
+                      <div className="absolute left-1/2 top-[3%] h-[13%] w-[20%] -translate-x-1/2 border-2 border-t-0 border-white/90" />
+                      <div className="absolute bottom-[3%] left-1/2 h-[13%] w-[20%] -translate-x-1/2 border-2 border-b-0 border-white/90" />
+
+                      {/* Top goal posts */}
+                      <div className="absolute left-1/2 top-0 flex -translate-x-1/2 gap-2 sm:gap-3">
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                      </div>
+
+                      {/* Bottom goal posts */}
+                      <div className="absolute bottom-0 left-1/2 flex -translate-x-1/2 items-end gap-2 sm:gap-3">
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                      </div>
+
+                      {/* No search yet */}
+                      {!normalizedPlayerSearch && (
+                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+                          <div className="rounded-lg bg-black/55 px-4 py-2 text-center text-xs font-medium text-white shadow-lg backdrop-blur-sm sm:text-sm">
+                            Search for a player to view their field position
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Search did not match any player */}
+                      {normalizedPlayerSearch &&
+                        searchedFieldPlayers.length === 0 && (
+                          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+                            <div className="rounded-lg bg-black/55 px-4 py-2 text-center text-xs font-medium text-white shadow-lg backdrop-blur-sm sm:text-sm">
+                              No matching player found
+                            </div>
+                          </div>
+                        )}
+
+                      {/* Only searched players are rendered on the field */}
+                      {normalizedPlayerSearch &&
+                        searchedFieldPlayers.map((player) => (
+                          <div
+                            key={player.id}
+                            className="absolute z-20 -translate-x-1/2 -translate-y-1/2"
+                            style={{
+                              left: `${player.fieldX}%`,
+                              top: `${player.fieldY}%`,
+                            }}
+                          >
+                            {/* Animated outer glow */}
+                            <div className="absolute left-1/2 top-1/2 h-14 w-14 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full bg-yellow-300/60 sm:h-16 sm:w-16" />
+
+                            {/* Soft glow */}
+                            <div className="absolute left-1/2 top-1/2 h-14 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full bg-yellow-300/40 blur-md sm:h-16 sm:w-16" />
+
+                            {/* Player marker */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPlayer(player)}
+                              title={`${player.name} - ${player.team} - ${player.position}`}
+                              className="relative flex h-9 w-9 scale-125 items-center justify-center rounded-full border-2 border-yellow-200 bg-yellow-400 text-xs font-bold text-gray-950 shadow-lg ring-4 ring-yellow-300/40 transition-all duration-300 hover:scale-[1.35] sm:h-10 sm:w-10 lg:h-11 lg:w-11"
+                            >
+                              {player.number}
+                            </button>
+
+                            {/* Player name */}
+                            <div className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-yellow-400 px-2 py-1 text-[10px] font-semibold text-gray-950 shadow-md sm:text-xs">
+                              {player.name}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-4 text-xs sm:text-sm">
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <span className="h-3 w-3 rounded-full bg-yellow-400" />
+                        Searched Player
+                      </div>
+
+                      {normalizedPlayerSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setSearchTerm("")}
+                          className="font-medium text-green-700 transition-colors hover:text-green-800 hover:underline"
+                        >
+                          Clear field highlight
+                        </button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center justify-between">
@@ -1826,7 +2164,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                       <Select
                         value={comparisonPlayer.name}
                         onValueChange={(name) => {
-                          const player = mockPlayers.find(
+                          const player = players.find(
                             (p) => p.name === name,
                           );
                           if (player) setComparisonPlayer(player);
@@ -1836,7 +2174,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                           <SelectValue placeholder="Select player to compare" />
                         </SelectTrigger>
                         <SelectContent>
-                          {mockPlayers
+                          {players
                             .filter((p) => p.id !== selectedPlayer.id)
                             .map((player) => (
                               <SelectItem key={player.id} value={player.name}>
@@ -1881,6 +2219,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                                         comparisonPlayer[
                                           stat as keyof typeof comparisonPlayer
                                         ] as number,
+                                        1,
                                       )) *
                                     100
                                   }
@@ -1903,6 +2242,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                                         comparisonPlayer[
                                           stat as keyof typeof comparisonPlayer
                                         ] as number,
+                                        1,
                                       )) *
                                     100
                                   }
@@ -1921,6 +2261,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                 </Card>
               </div>
             </div>
+            )}
           </TabsContent>
 
           {/* Current Match Insights */}
