@@ -1,10 +1,10 @@
 import cv2
 import os
-import json
-import numpy as np                     # Used for creating the "canvas" for letterboxing
+import json  
+import time                 # Used for pipeline performance timing
 from concurrent.futures import ThreadPoolExecutor # For background file saving
 # Import utils
-from video_processing.utils import get_video_stats, check_blur, save_frame_worker
+from video_processing.utils import get_video_stats, check_blur, save_frame_worker, apply_clahe_enhancement, get_detection_sample_interval
 from video_processing.tiling import generate_tiles
 
 #Logic to find the config relative to the Project Root
@@ -29,19 +29,18 @@ def runtime_preprocessing(frame, config):
     Current implementation:
         - Configurable tiling.
         - Configurable tile overlap.
+        - Conditional CLAHE.
 
     Future additions:
         - Use video-level quality thresholds
           calculated during video analysis.
-        - Conditional CLAHE.
-        - Optional letterboxing.
-
+        
     The frame is currently returned unchanged unless
     tiling is enabled.
     """
 
     # --------------------------------------------------------
-    # FUTURE T2: QUALITY-BASED PREPROCESSING
+    # FUTURE: QUALITY-BASED PREPROCESSING
     # --------------------------------------------------------
     #
     # Video-level quality statistics will be calculated
@@ -121,24 +120,6 @@ def runtime_preprocessing(frame, config):
         )
 
 
-    # --------------------------------------------------------
-    # FUTURE T2: LETTERBOXING
-    # --------------------------------------------------------
-    #
-    # Later:
-    #
-    # if config.get("enable_letterbox", False):
-    #     ...
-    #
-    # Letterboxing will prepare the frame/tile for the
-    # downstream detection model while preserving aspect ratio.
-    #
-    # The target size should come from the detector's
-    # input requirements.
-    #
-    # --------------------------------------------------------
-
-
     return (
         processed_frame,
         tiles,
@@ -149,6 +130,9 @@ def process_video(video_id: str, video_path: str):
     """
     video_path: Expected as 'data/raw/filename.mp4' (relative to Root (2026_T1))
     """
+    #measures the actual wall-clock duration of the complete Video Processing operation(Benchmark)
+    pipeline_start = time.perf_counter()
+
     config = load_config()
     
     #normpath will clean up any accidental double slashes (like data//raw) to ensure the OS can find the file
@@ -160,7 +144,7 @@ def process_video(video_id: str, video_path: str):
     # CURRENT:
     #   Calculates the dynamic blur threshold.
     #
-    # FUTURE T2:
+    # FUTURE:
     #   Extend this analysis stage to also calculate
     #   video-level contrast, brightness and sharpness
     #   statistics and derive their thresholds.
@@ -171,32 +155,29 @@ def process_video(video_id: str, video_path: str):
 
     # Establish the 'Sharpness Floor' for this specific crowd footage
     print(f"Analyzing crowd video quality for {video_id}...")
+
+    #(Benchmark)
+    stats_start = time.perf_counter()
+
     # If variance is less then threshold blurry image else sharp image
-    dynamic_threshold = get_video_stats(full_input_path, config["sample_rate"])
+    dynamic_threshold = get_video_stats(full_input_path)
+
+    #(Benchmark)
+    stats_time = time.perf_counter() - stats_start
+
     print(f"Calculated Crowd Quality Threshold: {dynamic_threshold:.2f}")
+    print(f"Video statistics time: {stats_time:.4f} s")
+
 
     
     # ------------------------------------------------------------
-    # Frame and Tile Paths
+    # Frame Paths
     # ------------------------------------------------------------
     #contains path where output frames will be stored
     output_dir = os.path.join(BASE_DIR, config["extracted_frames_dir"])
     #It creates folder where output frames will be stored if only folder is already not created
     os.makedirs(output_dir, exist_ok=True)
 
-    #Contains path where generated tiles will be stored.
-    tiled_output_dir = os.path.join(
-                        BASE_DIR,
-                        "video_processing",
-                        "data",
-                        "tiled_frames"
-                    )
-    os.makedirs(
-                        tiled_output_dir,
-                        exist_ok=True
-                    )
-
-    
     
     #opens video stream
     cap = cv2.VideoCapture(full_input_path)
@@ -208,35 +189,111 @@ def process_video(video_id: str, video_path: str):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+    # Get the total number of frames in the video.
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Calculate the frame interval based on the video duration.
+    # For example, if this returns 5, we process every 5th frame.
+    detection_sample_interval = get_detection_sample_interval(
+        total_frames,
+        fps
+    )
     
     frames_metadata = []
     save_futures = []
     count = 0
     extracted_count = 1 
 
+    #Counters for benchmark(Benchmark)
+    total_blur_time = 0.0
+    total_tiling_time = 0.0
+    total_frames_read = 0
+    total_tiles_generated = 0
+
+    total_clahe_time = 0.0
+    total_clahe_frames = 0
+    total_decoding_time = 0.0
+    total_main_read_time = 0.0
+    total_recovery_read_time = 0.0
+    total_jpeg_time = 0.0
+    total_sampled_frames = 0
+    total_processed_frames = 0
+
+
     print(f"--- Processing Video: {video_path} ---")
 
     try:
         while True:
+            #(Benchmark)
+            decode_start = time.perf_counter()
             #we read video frame by frame
             ret, frame = cap.read()
+            #(Benchmark)
+            decode_time = time.perf_counter() - decode_start
+            total_decoding_time += decode_time
+            total_main_read_time += decode_time
+
             #if no frames left, we get out of loop
             if not ret: break
             
-            #Frame Sampling (We take snapshot every 30 frames, instead of taking snapshot of all frames) 
-            if count % config["sample_rate"] == 0:
+            # Increase the frame counter immediately after successfully reading a frame.
+            count += 1
+
+            #Tells how much video was processed(Benchmark)
+            total_frames_read += 1
+
+            #Dynamic Frame Sampling (We take snapshot every nth frames, instead of taking snapshot of all frames based on video duration) 
+            if count % detection_sample_interval == 0:
+                #Total sampled frames(Benchmark)
+                total_sampled_frames += 1
+                #Measure blur detection time(Benchmark)
+                blur_start = time.perf_counter()
                 score, is_sharp = check_blur(frame, dynamic_threshold)
+                #Measure blur detection time(Benchmark)
+                total_blur_time += time.perf_counter() - blur_start
                 
                 # If the camera is panning or shaking(blurry frame), check the next few frames.
                 # Crowd faces are unrecognizable in motion blur.
                 search_count = 0
                 while not is_sharp and search_count < 8: # Slightly longer window for crowd stabilization
+                    #(Benchmark)
+                    recovery_start = time.perf_counter()
                     ret, frame = cap.read()
+                    #(Benchmark)
+                    recovery_time = time.perf_counter() - recovery_start
+                    total_decoding_time += recovery_time
+                    total_recovery_read_time += recovery_time
+
                     if not ret: break
+
+                    # Recovery has consumed another actual video frame, so update the frame counter.
                     count += 1
+                    # Count how many recovery attempts have been made.
                     search_count += 1
+                    #Measure blur detection time(Benchmark)
+                    blur_start = time.perf_counter()
                     score, is_sharp = check_blur(frame, dynamic_threshold)
-                
+                    #Measure blur detection time(Benchmark)
+                    total_blur_time += time.perf_counter() - blur_start
+
+
+                # ------------------------------------------------------------
+                # CONDITIONAL CLAHE ENHANCEMENT
+                # ------------------------------------------------------------
+                if not is_sharp:
+                    total_clahe_frames += 1
+                    clahe_start = time.perf_counter()
+
+                    processed_frame = apply_clahe_enhancement(frame)
+
+                    total_clahe_time += time.perf_counter() - clahe_start
+                else:
+                    # Frame quality is already acceptable, so skip CLAHE.
+                    processed_frame = frame
+
+
+
                 # ------------------------------------------------------------
                 # T2 RUNTIME PREPROCESSING
                 # ------------------------------------------------------------
@@ -244,72 +301,30 @@ def process_video(video_id: str, video_path: str):
                 # Current:
                 #   - Configurable tiling.
                 #   - Configurable tile overlap.
+                #   - Conditional CLAHE.
                 #
                 # Future:
                 #   - Compare current-frame quality against
                 #     video-level thresholds.
-                #   - Conditional CLAHE.
-                #   - Letterboxing.
                 #
+                #Measure tiling time(Benchmark)
+                tiling_start = time.perf_counter()
                 processed_frame, tiles, tile_metadata = runtime_preprocessing(
-                    frame,
+                    processed_frame,
                     config
                 )
+                #Measure tiling time(Benchmark)
+                tiling_time = time.perf_counter() - tiling_start
+                total_tiling_time += tiling_time
+                total_tiles_generated += len(tiles)
+
+                
 
                 #frame naming for maintaining frame order
                 fname = f"frame_{extracted_count:04d}.jpg"
                 save_path = os.path.join(output_dir, fname)
                 
                 save_futures.append(executor.submit(save_frame_worker, save_path, processed_frame))
-
-               
-                # ------------------------------------------------------------
-                # CURRENT T2: SAVE TILES
-                # ------------------------------------------------------------
-
-                if config.get(
-                    "enable_tiling",
-                    False
-                ):
-
-                    for tile_index, tile in enumerate(
-                        tiles
-                    ):
-
-                        tile_filename = (
-                            f"frame_"
-                            f"{extracted_count:04d}_"
-                            f"tile_"
-                            f"{tile_index + 1}.jpg"
-                        )
-
-
-                        tile_path = os.path.join(
-                            tiled_output_dir,
-                            tile_filename
-                        )
-
-
-                        # Use the existing background saving worker
-                        # for tiles as well as normal frames.
-
-                        save_futures.append(
-                            executor.submit(
-                                save_frame_worker,
-                                tile_path,
-                                tile
-                            )
-                        )
-
-
-                        # Add the tile's output path to its metadata.
-
-                        tile_metadata[tile_index]["tile_path"] = (
-                            f"video_processing/data/"
-                            f"tiled_frames/"
-                            f"{tile_filename}"
-                        )
-
 
 
                 #Match the 'DetectionFrame' schema in shared/models.py
@@ -323,16 +338,55 @@ def process_video(video_id: str, video_path: str):
                     "tiles": tile_metadata
                 })
                     
-
-
+                #(Benchmark)
+                total_processed_frames += 1
                 extracted_count += 1
-            count += 1
     finally:
         #This "closes" the video file. If we don't do this, the computer might keep the file "locked," and we won't be able to delete or move it until we restart the PC
         cap.release()
 
+    #(Benchmark)
+    jpeg_start = time.perf_counter()
     for future in save_futures:
         future.result()
+    #(Benchmark)
+    jpeg_time = time.perf_counter() - jpeg_start
+
+    #Measure end to end time(Benchmark)
+    pipeline_time = time.perf_counter() - pipeline_start
+
+    print("\n========== VIDEO PROCESSING BENCHMARK ==========")
+
+    print("\nVIDEO")
+    print("-----------------------------------------------")
+    print(f"Video statistics:       {stats_time:.4f} s")
+    print(f"Video decoding:         {total_decoding_time:.4f} s")
+    print(f"  Main-loop reads:      {total_main_read_time:.4f} s")
+    print(f"  Blur-recovery reads:  {total_recovery_read_time:.4f} s")
+
+    print("\nFRAME PROCESSING")
+    print("-----------------------------------------------")
+    print(f"Blur detection:         {total_blur_time:.4f} s")
+    print(f"CLAHE enhancement:      {total_clahe_time:.4f} s")
+    print(f"Tiling:                 {total_tiling_time:.4f} s")
+
+    print("\nSAVING")
+    print("-----------------------------------------------")
+    print(f"JPEG writing:           {jpeg_time:.4f} s")
+
+    print("\nCOUNTS")
+    print("-----------------------------------------------")
+    print(f"Frames read:            {total_frames_read}")
+    print(f"Sampled frames:         {total_sampled_frames}")
+    print(f"Processed frames:       {total_processed_frames}")
+    print(f"CLAHE frames:           {total_clahe_frames}")
+    print(f"Tiles generated:        {total_tiles_generated}")
+
+    print("-----------------------------------------------")
+    print(f"Total pipeline time:    {pipeline_time:.4f} s")
+    print("===============================================\n")
+
+    print("================================================\n")
 
     #Return the dictionary for the Service Layer to use
     return {
@@ -362,8 +416,8 @@ if __name__ == "__main__":
     # the tiling settings to generate_tiles().
 
     test_res = process_video(
-        "match_01",
-        "data/raw/match_01.mp4"
+        "side",
+        "data/raw/side.mp4"
     )
 
     if "error" in test_res:

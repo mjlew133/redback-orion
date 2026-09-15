@@ -1,6 +1,3 @@
-import cv2
-
-
 def generate_tiles(frame, rows=2, cols=2, overlap=0.0):
     """
     Split an image into equal-sized tiles.
