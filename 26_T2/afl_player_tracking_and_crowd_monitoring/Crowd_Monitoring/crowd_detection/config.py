@@ -1,7 +1,13 @@
 import os
 from pathlib import Path
 
-CURRENT_DIR=os.path.dirname(os.path.abspath(__file__))
+# Must be set before `import ultralytics` (main.py imports this module first
+# for that reason). Quiets ultralytics' own load-time prints (e.g. "Loading
+# X for ONNX Runtime inference...") so the pipeline's benchmark report is
+# the only output, not scattered third-party log lines.
+os.environ.setdefault("YOLO_VERBOSE", "False")
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_NAME = os.path.join(CURRENT_DIR, "face_model.pt")   # Model downloaded from https://huggingface.co/arnabdhar/YOLOv8-Face-Detection
 
 # --- Inference device -------------------------------------------------------
@@ -21,7 +27,7 @@ MODEL_NAME = os.path.join(CURRENT_DIR, "face_model.pt")   # Model downloaded fro
 # If nvidia-smi shows an older driver that cu128 rejects at runtime, try cu126.)
 DEVICE = os.environ.get("CROWD_DEVICE", "dml")
 
-## CHANGE AUTO DML
+
 def _resolve_device(pref):
     pref = (pref or "auto").strip().lower()
     if pref in ("", "auto"):
@@ -50,7 +56,7 @@ def _resolve_device(pref):
 
 RESOLVED_DEVICE = _resolve_device(DEVICE)
 USE_CUDA = RESOLVED_DEVICE.startswith("cuda")
-USE_DML  = RESOLVED_DEVICE == "dml"
+USE_DML = RESOLVED_DEVICE == "dml"
 
 # OpenVINO export of yolo26mcrowdpeoplefaces.pt (dynamic batch, imgsz 640) - ~2-4x
 # faster on CPU, same weights. Re-export with:
@@ -80,27 +86,18 @@ elif USE_DML:
     # a valid torch device for its pre/post-processing tensors.
     PREDICT_KWARGS["device"] = "cpu"
 
-PEOPLE_CLASS_ID   = 1
+PEOPLE_CLASS_ID = 1
 
 ANNOTATED_DIR = Path("crowd_detection_output") / "face_detection_results"
-PERSON_CLASS = None
 PEOPLE_ANNOTATED_DIR = Path("crowd_detection_output") / "people_detection_results"
 
 DEFAULT_CONF = 0.20
-DEFAULT_IOU  = 0.30
+DEFAULT_IOU = 0.30
 USE_TILING = True
 USE_FACE_DETECTION = False
 SAVE_TILE_DEBUG = False
 TILE_DEBUG_DIR = Path("crowd_detection_output") / "tile_debug"
 
-ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-
-
-OUTPUT_DIR = Path("detection_output")
-
-TILE_ROWS = 2
-TILE_COLS = 3
-TILE_OVERLAP = 0.2
 TILE_IMGSZ = 640
 
 # Tiles run in batched forward passes; a GPU chews through a bigger batch.
@@ -113,7 +110,7 @@ TILE_BATCH = 16 if (USE_CUDA or USE_DML) else 8
 # 1. Temporal decimation. Run the detector on every Nth extracted frame and
 #    carry the previous result forward for the rest. 1 = detect every frame.
 #    Crowd counts barely move frame-to-frame, so 3-8 is usually invisible.
-DETECT_STRIDE = int(os.environ.get("CROWD_DETECT_STRIDE", "8"))
+DETECT_STRIDE = int(os.environ.get("CROWD_DETECT_STRIDE", "30"))
 
 # 2. Downscale the frame before tiling/inference (boxes are scaled back to
 #    full res afterwards). 0 = off. 1920 turns 4K into ~1080p - ~4x fewer

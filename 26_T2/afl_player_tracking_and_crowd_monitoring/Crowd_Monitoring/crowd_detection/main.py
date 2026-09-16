@@ -12,7 +12,7 @@ from pathlib import Path
 # which ultralytics only reads at import time.
 from .config import (
     DEFAULT_CONF, DEFAULT_IOU, MODEL_NAME, PEOPLE_ANNOTATED_DIR, PEOPLE_CLASS_ID, PEOPLE_MODEL_NAME,
-    ANNOTATED_DIR, TILE_BATCH, TILE_COLS, TILE_IMGSZ, TILE_OVERLAP, TILE_ROWS, USE_FACE_DETECTION, USE_TILING, SAVE_TILE_DEBUG, TILE_DEBUG_DIR,
+    ANNOTATED_DIR, TILE_BATCH, TILE_IMGSZ, USE_FACE_DETECTION, USE_TILING, SAVE_TILE_DEBUG, TILE_DEBUG_DIR,
     PREDICT_KWARGS, RESOLVED_DEVICE, USE_CUDA, USE_DML,
     DETECT_STRIDE, DETECT_MAX_WIDTH, SKIP_EMPTY_TILES, MIN_TILE_FILL,
 )
@@ -74,12 +74,13 @@ def _nms(boxes, scores, iou_thresh):
     return keep
 
 def load_models():
+    # Progress isn't printed here - backend/device/load time are already
+    # captured in detect_crowd()'s returned summary, which the top-level
+    # pipeline folds into one combined report instead of live prints.
     face_model = None
     if USE_FACE_DETECTION:
-        print(f"[INFO] Loading face model: {MODEL_NAME}")
         face_model = YOLO(MODEL_NAME)
 
-    print(f"[INFO] Loading people model: {PEOPLE_MODEL_NAME}")
     # Repin ONNX Runtime to DirectML before YOLO builds its inference session -
     # Ultralytics only ever picks CUDA/CoreML/CPU providers on its own.
     if USE_DML:
@@ -93,9 +94,7 @@ def load_models():
     # host->device copy. A TensorRT .engine is already device-bound; skip it.
     if USE_CUDA and str(PEOPLE_MODEL_NAME).lower().endswith(".pt"):
         people_model.to(RESOLVED_DEVICE)
-    print(f"[INFO] Inference device: {RESOLVED_DEVICE}")
 
-    print("[INFO] Models ready ✓\n")
     return face_model, people_model
 
 
@@ -313,7 +312,11 @@ def _tiles_kept_by_mask(meta, crowd_mask, min_fill):
     return keep
 
 def detect_crowd(processed_video: dict) -> dict:
-    face_model, people_model = load_models() 
+    load_start = time.perf_counter()
+    face_model, people_model = load_models()
+    model_load_s = time.perf_counter() - load_start
+
+    io_ms_total = 0.0
     all_results = []
     safe_video_id = _safe_video_id(processed_video.get("video_id"))
     people_video_output_dir = PEOPLE_OUTPUT_DIR / safe_video_id
@@ -352,6 +355,7 @@ def detect_crowd(processed_video: dict) -> dict:
         if not resolved_frame_path.is_absolute():
             resolved_frame_path = PROJECT_ROOT / resolved_frame_path
 
+        io_start = time.perf_counter()
         frame = cv2.imread(str(resolved_frame_path))
 
         if frame is None:
@@ -367,6 +371,7 @@ def detect_crowd(processed_video: dict) -> dict:
             elif not mask_shape_warned:
                 print(f"[WARN] crowd_mask {crowd_mask.shape[:2]} != frame {frame.shape[:2]}; not masking")
                 mask_shape_warned = True
+        io_ms_total += (time.perf_counter() - io_start) * 1000
 
         debug_tag = f"frame_{frame_data['frame_id']:04d}"
 
@@ -415,18 +420,31 @@ def detect_crowd(processed_video: dict) -> dict:
             face_detections = last_face if USE_FACE_DETECTION else None
             detection_ms = 0.0
 
-        if USE_FACE_DETECTION:
-            face_count = len(face_detections)
-            annotated = draw_boxes(frame, face_detections)
-            face_output_path = FACE_OUTPUT_DIR / f"frame_{frame_data['frame_id']:04d}.jpg"
-            cv2.imwrite(str(face_output_path), annotated)
-            face_annotated_frame_path = str(face_output_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        # Only draw+save an annotated JPEG on frames that actually ran the
+        # detector. Carried-forward frames (run_detect=False) would just
+        # redraw stale boxes on a new frame for no consumer that needs it:
+        # no UI iterates every frame's annotated image (only the single
+        # peak-crowd frame is ever served, and peak selection always lands
+        # on a detected frame since person_count only changes there), and
+        # the crowd_behaviour_analytics fallback readers already prefer the
+        # raw frame_path and tolerate a missing annotated path.
+        people_annotated_frame_path = None
 
-        # save annotated frame for people
-        people_annotated = draw_people_boxes(frame, people_detections)
-        people_output_path = people_video_output_dir / f"frame_{frame_data['frame_id']:04d}.jpg"
-        cv2.imwrite(str(people_output_path), people_annotated)
-        people_annotated_frame_path = str(people_output_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        if run_detect:
+            io_start = time.perf_counter()
+            if USE_FACE_DETECTION:
+                face_count = len(face_detections)
+                annotated = draw_boxes(frame, face_detections)
+                face_output_path = FACE_OUTPUT_DIR / f"frame_{frame_data['frame_id']:04d}.jpg"
+                cv2.imwrite(str(face_output_path), annotated)
+                face_annotated_frame_path = str(face_output_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+
+            # save annotated frame for people
+            people_annotated = draw_people_boxes(frame, people_detections)
+            people_output_path = people_video_output_dir / f"frame_{frame_data['frame_id']:04d}.jpg"
+            cv2.imwrite(str(people_output_path), people_annotated)
+            people_annotated_frame_path = str(people_output_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            io_ms_total += (time.perf_counter() - io_start) * 1000
 
         all_results.append({
             "frame_id": frame_data["frame_id"],
@@ -465,24 +483,18 @@ def detect_crowd(processed_video: dict) -> dict:
         "skip_empty_tiles": SKIP_EMPTY_TILES,
         "total_detection_seconds": round(detection_ms_total / 1000, 2),
         "ms_per_detected_frame": round(detection_ms_total / frames_detected, 1) if frames_detected else 0.0,
+        "model_load_seconds": round(model_load_s, 2),
+        "frame_io_seconds": round(io_ms_total / 1000, 2),   # imread + mask + draw + imwrite, detected frames only
         "peak_people_per_frame": peak_people,
     }
 
     summary_path = SUMMARY_OUTPUT_DIR / f"detection_summary_run_{run_number:03d}.json"
     with open(summary_path, "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2)
+    summary["summary_json_path"] = str(summary_path)
 
-    print(f"\n=== crowd detection summary (run {run_number}) ===")
-    print(f"  model           : {summary['model']}")
-    print(f"  backend/device  : {summary['backend']} on {summary['device']}")
-    print(f"  openvino        : {summary['openvino']}")
-    print(f"  total time      : {summary['total_detection_seconds']:.2f} s over {frames_timed} frame(s)")
-    print(f"  detector runs   : {frames_detected}/{frames_timed} frame(s) "
-          f"(stride {DETECT_STRIDE}), {summary['ms_per_detected_frame']:.0f} ms each")
-    print(f"  downscale/skip  : max_width={DETECT_MAX_WIDTH or 'off'}, skip_empty_tiles={SKIP_EMPTY_TILES}")
-    print(f"  people detected : peak {peak_people}/frame")
-    print(f"  summary json    : {summary_path}")
-
+    # Not printed here - the top-level pipeline call folds this summary
+    # into one combined report instead of printing it mid-run.
     return {
         "video_id": processed_video["video_id"],
         "frame_width": frame_width,
