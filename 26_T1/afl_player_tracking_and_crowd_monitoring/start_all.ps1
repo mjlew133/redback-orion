@@ -4,10 +4,10 @@ Write-Host "Starting Player Service (port 8080)..."
 Start-Process -FilePath "python" -ArgumentList "-m uvicorn main:app --host 0.0.0.0 --port 8080" -WorkingDirectory "$root\player_service" -NoNewWindow
 
 Write-Host "Starting Crowd Service (port 8002)..."
-Start-Process -FilePath "python" -ArgumentList "-m uvicorn shared.services.main:app --host 0.0.0.0 --port 8002" -WorkingDirectory "$root\Crowd_Monitoring\2026_T1" -NoNewWindow
+Start-Process -FilePath "python" -ArgumentList "-m uvicorn shared.services.main:app --host 0.0.0.0 --port 8002" -WorkingDirectory "$root\..\..\26_T2\afl_player_tracking_and_crowd_monitoring\Crowd_Monitoring" -NoNewWindow
 
 Write-Host "Starting Backend Gateway (port 8000)..."
-Start-Process -FilePath "python" -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port 8000" -WorkingDirectory "$root\backend" -NoNewWindow
+Start-Process -FilePath "python" -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port 8000" -WorkingDirectory "$root\backend" -NoNewWindow 
 
 Write-Host "Waiting for services to start..."
 Start-Sleep -Seconds 10

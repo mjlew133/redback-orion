@@ -45,14 +45,14 @@ services:
 
   crowd-monitoring:
     build:
-      context: ..
-      dockerfile: Crowd_Monitoring/2026_T1/Dockerfile
+      context: ../afl_player_tracking_and_crowd_monitoring/Crowd_Monitoring
+      dockerfile: Dockerfile
     ports:
       - "8002:8002"
     restart: unless-stopped
     volumes:
-      - ../Crowd_Monitoring/2026_T1/output:/app/output
-      - ../Crowd_Monitoring/2026_T1/analytics_output:/app/analytics_output
+      - ../afl_player_tracking_and_crowd_monitoring/Crowd_Monitoring/output:/app/output
+      - ../afl_player_tracking_and_crowd_monitoring/Crowd_Monitoring/analytics_output:/app/analytics_output
       - uploads_data:/app/uploads
 
   db:
