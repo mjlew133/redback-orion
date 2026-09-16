@@ -153,23 +153,16 @@ def process_video(video_id: str, video_path: str):
     # in one place rather than creating a separate
     # quality-analysis pass.
 
-    # Establish the 'Sharpness Floor' for this specific crowd footage
-    print(f"Analyzing crowd video quality for {video_id}...")
-
     #(Benchmark)
     stats_start = time.perf_counter()
 
     # If variance is less then threshold blurry image else sharp image
-    dynamic_threshold = get_video_stats(full_input_path)
+    dynamic_threshold, video_stats = get_video_stats(full_input_path)
 
     #(Benchmark)
     stats_time = time.perf_counter() - stats_start
 
-    print(f"Calculated Crowd Quality Threshold: {dynamic_threshold:.2f}")
-    print(f"Video statistics time: {stats_time:.4f} s")
 
-
-    
     # ------------------------------------------------------------
     # Frame Paths
     # ------------------------------------------------------------
@@ -220,15 +213,24 @@ def process_video(video_id: str, video_path: str):
     total_sampled_frames = 0
     total_processed_frames = 0
 
-
-    print(f"--- Processing Video: {video_path} ---")
-
     try:
         while True:
+            # Only a frame landing on the sampling interval is actually used
+            # below; the rest were previously fully decoded via cap.read()
+            # and immediately discarded. grab() skips the costly
+            # retrieve()/colour-convert step for those - same fix applied to
+            # get_video_stats() above.
+            next_count = count + 1
+            needed = (next_count % detection_sample_interval == 0)
+
             #(Benchmark)
             decode_start = time.perf_counter()
-            #we read video frame by frame
-            ret, frame = cap.read()
+            if needed:
+                #we read video frame by frame
+                ret, frame = cap.read()
+            else:
+                ret = cap.grab()
+                frame = None
             #(Benchmark)
             decode_time = time.perf_counter() - decode_start
             total_decoding_time += decode_time
@@ -236,15 +238,15 @@ def process_video(video_id: str, video_path: str):
 
             #if no frames left, we get out of loop
             if not ret: break
-            
+
             # Increase the frame counter immediately after successfully reading a frame.
-            count += 1
+            count = next_count
 
             #Tells how much video was processed(Benchmark)
             total_frames_read += 1
 
-            #Dynamic Frame Sampling (We take snapshot every nth frames, instead of taking snapshot of all frames based on video duration) 
-            if count % detection_sample_interval == 0:
+            #Dynamic Frame Sampling (We take snapshot every nth frames, instead of taking snapshot of all frames based on video duration)
+            if needed:
                 #Total sampled frames(Benchmark)
                 total_sampled_frames += 1
                 #Measure blur detection time(Benchmark)
@@ -355,38 +357,27 @@ def process_video(video_id: str, video_path: str):
     #Measure end to end time(Benchmark)
     pipeline_time = time.perf_counter() - pipeline_start
 
-    print("\n========== VIDEO PROCESSING BENCHMARK ==========")
-
-    print("\nVIDEO")
-    print("-----------------------------------------------")
-    print(f"Video statistics:       {stats_time:.4f} s")
-    print(f"Video decoding:         {total_decoding_time:.4f} s")
-    print(f"  Main-loop reads:      {total_main_read_time:.4f} s")
-    print(f"  Blur-recovery reads:  {total_recovery_read_time:.4f} s")
-
-    print("\nFRAME PROCESSING")
-    print("-----------------------------------------------")
-    print(f"Blur detection:         {total_blur_time:.4f} s")
-    print(f"CLAHE enhancement:      {total_clahe_time:.4f} s")
-    print(f"Tiling:                 {total_tiling_time:.4f} s")
-
-    print("\nSAVING")
-    print("-----------------------------------------------")
-    print(f"JPEG writing:           {jpeg_time:.4f} s")
-
-    print("\nCOUNTS")
-    print("-----------------------------------------------")
-    print(f"Frames read:            {total_frames_read}")
-    print(f"Sampled frames:         {total_sampled_frames}")
-    print(f"Processed frames:       {total_processed_frames}")
-    print(f"CLAHE frames:           {total_clahe_frames}")
-    print(f"Tiles generated:        {total_tiles_generated}")
-
-    print("-----------------------------------------------")
-    print(f"Total pipeline time:    {pipeline_time:.4f} s")
-    print("===============================================\n")
-
-    print("================================================\n")
+    # Benchmark numbers are returned rather than printed here, so the
+    # caller can fold them into one combined report instead of this
+    # function printing its own block mid-run.
+    timings = {
+        "video_stats": video_stats,
+        "dynamic_threshold": round(dynamic_threshold, 2),
+        "stats_seconds": round(stats_time, 4),
+        "decoding_seconds": round(total_decoding_time, 4),
+        "main_read_seconds": round(total_main_read_time, 4),
+        "recovery_read_seconds": round(total_recovery_read_time, 4),
+        "blur_seconds": round(total_blur_time, 4),
+        "clahe_seconds": round(total_clahe_time, 4),
+        "tiling_seconds": round(total_tiling_time, 4),
+        "jpeg_write_seconds": round(jpeg_time, 4),
+        "total_seconds": round(pipeline_time, 4),
+        "frames_read": total_frames_read,
+        "sampled_frames": total_sampled_frames,
+        "processed_frames": total_processed_frames,
+        "clahe_frames": total_clahe_frames,
+        "tiles_generated": total_tiles_generated,
+    }
 
     #Return the dictionary for the Service Layer to use
     return {
@@ -394,7 +385,8 @@ def process_video(video_id: str, video_path: str):
         "video_path": video_path,
         "frame_width": frame_width,
         "frame_height": frame_height,
-        "frames": frames_metadata
+        "frames": frames_metadata,
+        "timings": timings,
     }
 
 if __name__ == "__main__":
@@ -428,3 +420,4 @@ if __name__ == "__main__":
             f"Successfully processed "
             f"{len(test_res['frames'])} frames."
         )
+        print(test_res["timings"])

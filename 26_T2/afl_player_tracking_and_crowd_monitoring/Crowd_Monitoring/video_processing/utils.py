@@ -22,6 +22,10 @@ def get_video_stats(full_input_path):
     Important:
     - The video is still decoded sequentially from start to end.
     - We only calculate the Laplacian variance on selected frames.
+
+    Returns (dynamic_threshold, stats) - stats is a dict describing what
+    was measured, for the caller to fold into one combined report instead
+    of this function printing it directly.
     """
 
     # Open the input video.
@@ -29,10 +33,10 @@ def get_video_stats(full_input_path):
 
     # Check that the video was opened successfully.
     if not cap.isOpened():
-        print(f"Unable to open video for statistics: {full_input_path}")
-
         # Return a safe default threshold if the video cannot be opened.
-        return 100.0
+        return 100.0, {
+            "note": f"Unable to open video for statistics: {full_input_path}"
+        }
 
     # Get the total number of frames in the video.
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -46,11 +50,6 @@ def get_video_stats(full_input_path):
 
     # Calculate the approximate video duration in seconds.
     duration = total_frames / fps
-
-    print(
-        f"Video duration: {duration:.2f} s | "
-        f"Total frames: {total_frames}"
-    )
 
     # ---------------------------------------------------------
     # Decide how much of the video should be analysed.
@@ -98,11 +97,6 @@ def get_video_stats(full_input_path):
     if statistics_samples > 2000:
         statistics_samples = 2000
 
-    print(
-        f"Sampling: {sampling_percentage * 100:.1f}% | "
-        f"Statistics samples: {statistics_samples}"
-    )
-
     # ---------------------------------------------------------
     # Create evenly distributed frame positions.
     # ---------------------------------------------------------
@@ -147,15 +141,17 @@ def get_video_stats(full_input_path):
     # the quality calculation on selected frames.
     while True:
 
-        # Read the next frame.
-        ret, frame = cap.read()
-
-        # Stop when there are no more frames.
-        if not ret:
-            break
-
         # Check whether this frame was selected for statistics.
         if count in sample_positions:
+
+            # Only fully decode (grab + retrieve) frames we actually
+            # need. cap.read() would decode every frame just to
+            # discard the ones outside sample_positions.
+            ret, frame = cap.read()
+
+            # Stop when there are no more frames.
+            if not ret:
+                break
 
             # Convert the selected frame to grayscale.
             gray = cv2.cvtColor(
@@ -179,6 +175,16 @@ def get_video_stats(full_input_path):
             if variance > 10:
                 variances.append(variance)
 
+        else:
+            # Demux/skip this frame without decoding it. grab() is
+            # far cheaper than read() since it does not decode the
+            # compressed packet into a full frame.
+            ret = cap.grab()
+
+            # Stop when there are no more frames.
+            if not ret:
+                break
+
         # Move to the next frame number.
         count += 1
 
@@ -188,11 +194,16 @@ def get_video_stats(full_input_path):
     # ---------------------------------------------------------
     # Handle the case where no useful statistics were collected.
     # ---------------------------------------------------------
-    if not variances:
-        print("No valid variance values found.")
+    base_stats = {
+        "duration": round(duration, 2),
+        "total_frames": total_frames,
+        "sampling_percentage": sampling_percentage,
+        "statistics_samples": statistics_samples,
+    }
 
+    if not variances:
         # Return the existing safe default threshold.
-        return 100.0
+        return 100.0, {**base_stats, "note": "No valid variance values found."}
 
     # Find the minimum observed sharpness value.
     v_min = min(variances)
@@ -213,19 +224,16 @@ def get_video_stats(full_input_path):
     # particular video instead of always using a fixed value.
     dynamic_threshold = v_avg * 0.8
 
-    # Print statistics so we can benchmark the behaviour.
-    print(
-        f"Stats - Min: {v_min:.2f}, "
-        f"Max: {v_max:.2f}, "
-        f"Avg: {v_avg:.2f}"
-    )
-
-    print(
-        f"Calculated Threshold: {dynamic_threshold:.2f}"
-    )
-
-    # Return the threshold to the main video-processing pipeline.
-    return dynamic_threshold
+    # Return the threshold plus what it was derived from, for the caller
+    # to fold into one combined report.
+    return dynamic_threshold, {
+        **base_stats,
+        "v_min": round(v_min, 2),
+        "v_max": round(v_max, 2),
+        "v_avg": round(v_avg, 2),
+        "threshold": round(dynamic_threshold, 2),
+        "note": None,
+    }
 
 def get_detection_sample_interval(total_frames, fps):
     """
@@ -270,12 +278,6 @@ def get_detection_sample_interval(total_frames, fps):
 
     else:
         sample_interval = 30
-
-    # Print the decision so we can verify it during benchmarking.
-    print(
-        f"Video duration: {duration:.2f} s | "
-        f"Detection frame interval: every {sample_interval} frames"
-    )
 
     # Return the selected interval.
     return sample_interval
