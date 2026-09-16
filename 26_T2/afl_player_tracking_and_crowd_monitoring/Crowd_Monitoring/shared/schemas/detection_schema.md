@@ -66,8 +66,8 @@ This service receives a video reference, runs video processing and crowd detecti
 - `timestamp` - number - time in seconds for the frame
 - `frame_path` - string - original extracted frame path from video processing
 - `annotated_frame_path` - string - default annotated frame path for downstream use; currently same as `people_annotated_frame_path`
-- `face_annotated_frame_path` - string - saved frame with face boxes
-- `people_annotated_frame_path` - string - saved frame with people boxes
+- `face_annotated_frame_path` - string or null - saved frame with face boxes; null on frames where `detected` is false (carried-forward detections aren't re-rendered)
+- `people_annotated_frame_path` - string or null - saved frame with people boxes; null on frames where `detected` is false (carried-forward detections aren't re-rendered)
 - `person_count` - integer - number of detected people in the frame
 - `face_count` - integer - number of detected faces in the frame
 - `face_detections` - list - detected faces in the frame

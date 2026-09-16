@@ -1,7 +1,5 @@
 """End-to-end service flow for the full crowd monitoring pipeline."""
 
-import time
-from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,24 +8,76 @@ from .crowd_analytics_service import process_analytics
 from .crowd_detection_service import process_detection
 from crowd_allocation_risk_zone.main import assess_risk
 from crowd_behaviour_analytics.main import analyze_behaviour
+from shared.timing import timed as _timed
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
-
-@contextmanager
-def _timed(label, sink):
-    """Record wall time for one pipeline stage into sink[label] (ms) and log it."""
-    start = time.perf_counter()
-    yield
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    sink[label] = round(elapsed_ms, 1)
-    print(f"[pipeline] {label:<10} {elapsed_ms / 1000:6.2f}s")
 
 
 def _safe_round(value, digits=2):
     if value is None:
         return None
     return round(float(value), digits)
+
+
+def _print_benchmark_report(detection_result: dict, timings: dict) -> None:
+    """One combined report for the whole run, printed once at the end,
+    instead of each stage printing its own piece as it finishes."""
+    vt = detection_result.get("video_processing_timings") or {}
+    ds = detection_result.get("detection_summary") or {}
+    stage_ms = detection_result.get("stage_timings_ms") or {}
+    vs = vt.get("video_stats") or {}
+
+    lines = ["", "========== PIPELINE BENCHMARK =========="]
+
+    if vt:
+        lines += [
+            "",
+            "VIDEO PROCESSING",
+            "-----------------------------------------------",
+            f"Video stats:            {vt.get('stats_seconds', 0):.2f} s"
+            + (f"  (duration {vs['duration']}s, {vs.get('statistics_samples')} samples,"
+               f" threshold {vs.get('threshold')})" if vs.get("note") is None and vs else ""),
+            f"Video decoding:         {vt.get('decoding_seconds', 0):.2f} s",
+            f"  Main-loop reads:      {vt.get('main_read_seconds', 0):.2f} s",
+            f"  Blur-recovery reads:  {vt.get('recovery_read_seconds', 0):.2f} s",
+            f"Blur detection:         {vt.get('blur_seconds', 0):.2f} s",
+            f"CLAHE enhancement:      {vt.get('clahe_seconds', 0):.2f} s",
+            f"Tiling:                 {vt.get('tiling_seconds', 0):.2f} s",
+            f"JPEG writing:           {vt.get('jpeg_write_seconds', 0):.2f} s",
+            f"Frames read/sampled/processed/CLAHE/tiles: "
+            f"{vt.get('frames_read', 0)}/{vt.get('sampled_frames', 0)}/{vt.get('processed_frames', 0)}/"
+            f"{vt.get('clahe_frames', 0)}/{vt.get('tiles_generated', 0)}",
+            f"Video processing total: {vt.get('total_seconds', 0):.2f} s",
+        ]
+
+    if ds:
+        lines += [
+            "",
+            "CROWD DETECTION",
+            "-----------------------------------------------",
+            f"Model:                  {ds.get('model')} ({ds.get('backend')} on {ds.get('device')})",
+            f"Model load:             {ds.get('model_load_seconds', 0):.2f} s",
+            f"Frame I/O:              {ds.get('frame_io_seconds', 0):.2f} s (read+mask+draw+write, "
+            f"{ds.get('frames_detected', 0)} detected frame(s))",
+            f"Inference:              {ds.get('total_detection_seconds', 0):.2f} s over "
+            f"{ds.get('frames_processed', 0)} frame(s) ({ds.get('frames_detected', 0)} detected, "
+            f"stride {ds.get('detect_stride')}, {ds.get('ms_per_detected_frame', 0):.0f} ms each)",
+            f"Peak people/frame:      {ds.get('peak_people_per_frame', 0)}",
+            f"Summary json:           {ds.get('summary_json_path')}",
+        ]
+
+    lines += ["", "STAGE TIMINGS", "-----------------------------------------------"]
+    for label, ms in stage_ms.items():
+        lines.append(f"{label:<24} {ms / 1000:6.2f} s")
+    for label, ms in timings.items():
+        lines.append(f"{label:<24} {ms / 1000:6.2f} s")
+    lines += [
+        "-----------------------------------------------",
+        f"{'TOTAL':<24} {sum(timings.values()) / 1000:6.2f} s",
+        "=========================================",
+    ]
+
+    print("\n".join(lines))
 
 
 def _build_summary(detection_result: dict, behaviour_result: dict, risk_result: dict, analytics_result: dict) -> dict:
@@ -174,9 +224,9 @@ def process_crowd_detection(data: dict):
     """Run detection, analytics, and intelligence as one frontend-facing flow."""
     timings: dict[str, float] = {}
 
-    with _timed("detection", timings):
+    with _timed("detection", timings, verbose=False):
         detection_result = process_detection(data)
-    with _timed("analytics", timings):
+    with _timed("analytics", timings, verbose=False):
         analytics_result = process_analytics(detection_result)
 
     intelligence_input = {
@@ -185,12 +235,12 @@ def process_crowd_detection(data: dict):
         "heatmap": analytics_result.get("heatmap", {}),
         "frames": detection_result.get("frames", []),
     }
-    with _timed("behaviour", timings):
+    with _timed("behaviour", timings, verbose=False):
         behaviour_result = analyze_behaviour(intelligence_input)
-    with _timed("risk", timings):
+    with _timed("risk", timings, verbose=False):
         risk_result = assess_risk(behaviour_result)
 
-    with _timed("assemble", timings):
+    with _timed("assemble", timings, verbose=False):
         payload = {
             "video_id": data.get("video_id"),
             "summary": _build_summary(detection_result, behaviour_result, risk_result, analytics_result),
@@ -201,6 +251,6 @@ def process_crowd_detection(data: dict):
             "density_extremes": _build_density_extremes(analytics_result, risk_result),
         }
 
-    print(f"[pipeline] {'TOTAL':<10} {sum(timings.values()) / 1000:6.2f}s  {timings}")
+    _print_benchmark_report(detection_result, timings)
     payload["stage_timings_ms"] = timings
     return payload
