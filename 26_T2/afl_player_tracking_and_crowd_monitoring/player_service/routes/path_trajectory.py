@@ -1,8 +1,8 @@
 import sys
 import uuid
-import json
 import shutil
 from pathlib import Path
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
 import config
 
@@ -20,6 +20,7 @@ async def path_trajectory(video: UploadFile = File(...)):
     video_path = config.UPLOADS_DIR / f"{job_id}_{Path(video.filename).name}"
     output_video = config.OUTPUTS_DIR / f"{job_id}_trajectory.mp4"
     output_json = config.OUTPUTS_DIR / f"{job_id}_trajectory.json"
+    output_csv = config.OUTPUTS_DIR / f"{job_id}_player_metrics.csv"
 
     with open(video_path, "wb") as f:
         shutil.copyfileobj(video.file, f)
@@ -33,22 +34,34 @@ async def path_trajectory(video: UploadFile = File(...)):
             model_path=config.MODEL_PATH,
             output_video_path=output_video,
             output_json_path=output_json,
+            output_csv_path=output_csv,
             process_seconds=9999,
             conf_threshold=0.25,
             imgsz=640,
         )
-        process_video(tracking_config)
 
-        with open(output_json) as f:
-            result_data = json.load(f)
+        result_data = process_video(tracking_config)
+        movement_metrics = result_data.get("movement_metrics", {})
 
-        internal_keys = {"video_path", "model_path", "output_video_path", "output_json_path"}
+        internal_keys = {
+            "video_path",
+            "model_path",
+            "output_video_path",
+            "output_json_path",
+            "output_csv_path",
+        }
+
         return {
             "status": "success",
             **{k: v for k, v in result_data.items() if k not in internal_keys},
-            "video_url": f"/outputs/{output_video.name}"
+            "metric_mode": movement_metrics.get("metric_mode"),
+            "calibration_available": movement_metrics.get("calibration_available"),
+            "metrics_csv_url": f"/outputs/{output_csv.name}",
+            "video_url": f"/outputs/{output_video.name}",
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
         video_path.unlink(missing_ok=True)
