@@ -50,7 +50,7 @@ class MetricsCalibrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "metrics.csv"
 
-            export_player_metrics_csv(
+            summary = export_player_metrics_csv(
                 tracks={1: self.make_track()},
                 csv_path=output_path,
                 fps=30.0,
@@ -75,6 +75,31 @@ class MetricsCalibrationTests(unittest.TestCase):
             places=3,
         )
 
+        self.assertEqual(
+            row["metric_mode"],
+            "pixel_estimate",
+        )
+        self.assertEqual(
+            row["calibration_available"],
+            "False",
+        )
+
+        self.assertEqual(
+            summary["metric_mode"],
+            "pixel_estimate",
+        )
+        self.assertFalse(
+            summary["calibration_available"]
+        )
+        self.assertEqual(
+            summary["exported_tracks"],
+            1,
+        )
+        self.assertEqual(
+            summary["metrics_csv_path"],
+            str(output_path),
+        )
+
     def test_calibration_uses_field_coordinates(self):
         config = TrackingConfig(
             pixel_to_meter=0.05,
@@ -96,7 +121,7 @@ class MetricsCalibrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "metrics.csv"
 
-            export_player_metrics_csv(
+            summary = export_player_metrics_csv(
                 tracks={1: self.make_track()},
                 csv_path=output_path,
                 fps=30.0,
@@ -119,6 +144,31 @@ class MetricsCalibrationTests(unittest.TestCase):
             float(row["avg_speed_kmh"]),
             180.0,
             places=3,
+        )
+
+        self.assertEqual(
+            row["metric_mode"],
+            "field_calibrated",
+        )
+        self.assertEqual(
+            row["calibration_available"],
+            "True",
+        )
+
+        self.assertEqual(
+            summary["metric_mode"],
+            "field_calibrated",
+        )
+        self.assertTrue(
+            summary["calibration_available"]
+        )
+        self.assertEqual(
+            summary["exported_tracks"],
+            1,
+        )
+        self.assertEqual(
+            summary["metrics_csv_path"],
+            str(output_path),
         )
 
 

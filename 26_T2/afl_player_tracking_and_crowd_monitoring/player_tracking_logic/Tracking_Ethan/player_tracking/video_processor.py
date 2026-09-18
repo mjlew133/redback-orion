@@ -150,7 +150,7 @@ def process_video(config: TrackingConfig):
         processed_frames=processed_frames,
     )
 
-    export_player_metrics_csv(
+    metrics_summary = export_player_metrics_csv(
         tracks=all_tracks,
         csv_path=config.output_csv_path,
         fps=fps,
@@ -170,6 +170,7 @@ def process_video(config: TrackingConfig):
         "resolution": {"width": int(width), "height": int(height)},
         "player_classes": [int(c) for c in config.player_classes],
         "jersey_clustering": clustering_summary,
+        "movement_metrics": metrics_summary,
         "tracks": tracker.to_json_records(),
     }
 
@@ -180,6 +181,8 @@ def process_video(config: TrackingConfig):
     print(f"Output video: {config.output_video_path}")
     print(f"Output JSON: {config.output_json_path}")
     print(f"Output CSV: {config.output_csv_path}")
+    print(f"Metric mode: {metrics_summary['metric_mode']}")
+    print(f"Calibration available: {metrics_summary['calibration_available']}")
     print(f"Total tracks: {len(export_data['tracks'])}")
     print(f"Jersey clustering: {clustering_summary}")
 

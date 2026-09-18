@@ -57,10 +57,20 @@ def export_player_metrics_csv(
 
     A single static homography is not suitable across broadcast camera cuts,
     pans or zoom changes unless the calibration remains valid.
+
+    Returns a small provenance summary so API consumers can determine whether
+    metre-based metrics were field calibrated or estimated from image pixels.
     """
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     homography = _get_homography(config)
+
+    calibration_available = homography is not None
+    metric_mode = (
+        "field_calibrated"
+        if calibration_available
+        else "pixel_estimate"
+    )
 
     fieldnames = [
         "track_id",
@@ -78,7 +88,11 @@ def export_player_metrics_csv(
         "total_distance_m",
         "avg_speed_kmh",
         "max_speed_kmh",
+        "metric_mode",
+        "calibration_available",
     ]
+
+    exported_tracks = 0
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
@@ -237,5 +251,16 @@ def export_player_metrics_csv(
                         float(max_speed_kmh),
                         3,
                     ),
+                    "metric_mode": metric_mode,
+                    "calibration_available": calibration_available,
                 }
             )
+
+            exported_tracks += 1
+
+    return {
+        "metric_mode": metric_mode,
+        "calibration_available": calibration_available,
+        "exported_tracks": exported_tracks,
+        "metrics_csv_path": str(csv_path),
+    }
