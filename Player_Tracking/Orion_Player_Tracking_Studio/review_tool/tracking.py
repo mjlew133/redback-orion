@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
+import tempfile
 from pathlib import Path
 from threading import Event
 from typing import Callable
@@ -31,12 +33,14 @@ def track_video(
         import imageio_ffmpeg
         from ultralytics import YOLO
     except ImportError as exc:
-        raise RuntimeError("Install the tracking requirements before starting a new run") from exc
+        raise RuntimeError(f"Tracking setup problem: {exc}") from exc
 
     video_path = Path(video_path)
     model_path = Path(model_path)
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
+    if max_frames is not None and max_frames <= 0:
+        raise ValueError("Frame limit must be greater than zero")
     if not video_path.exists() or not model_path.exists():
         raise FileNotFoundError("Choose an existing video and model")
 
@@ -47,8 +51,12 @@ def track_video(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if not cap.isOpened() or width <= 0 or height <= 0 or total <= 0:
+        cap.release()
+        raise ValueError("This video could not be opened. Choose a readable video file.")
     limit = min(total, max_frames) if max_frames else total
     stem = f"{video_path.stem}_{model_path.stem}"
+    output_folder = Path(tempfile.mkdtemp(prefix="run_", dir=str(output_folder)))
     out_video = output_folder / f"{stem}.mp4"
     out_csv = output_folder / f"{stem}.csv"
 
@@ -87,7 +95,17 @@ def track_video(
         cap.release()
         if writer.stdin:
             writer.stdin.close()
-        writer.wait()
+        code = writer.wait()
+    if code:
+        raise RuntimeError("Video export failed. The tracking CSV remains in the run folder.")
+    if processed == 0:
+        raise RuntimeError("No frames were processed")
+    out_csv.with_suffix(".json").write_text(json.dumps({
+        "processed_frames": processed, "source_frames": total, "fps": fps,
+        "source_video": str(video_path.resolve()),
+        "width": width, "height": height,
+        "stopped": processed < limit,
+    }, indent=2), encoding="utf-8")
 
     if progress:
         progress(processed, limit, "Preparing review")

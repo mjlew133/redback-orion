@@ -19,6 +19,7 @@ class TrackRow:
     y1: float = 0
     x2: float = 0
     y2: float = 0
+    extras: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -55,6 +56,36 @@ class ReviewProject:
     tracks: dict[str, TrackSummary] = field(default_factory=dict)
     events: list[ReviewEvent] = field(default_factory=list)
     manual_merges: dict[str, str] = field(default_factory=dict)
+    camera_analysis: dict = field(default_factory=dict)
+    team_data_sources: list[dict] = field(default_factory=list)
+
+    def import_team_data(self, path: str | Path, frame_offset: int = 0) -> int:
+        lookup = {(row.frame, row.track_id): row for row in self.rows}
+        pending = []
+        seen = set()
+        with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            keys = {"frame", "frame_id", "frame_number", "track_id", "player_id", "id"}
+            for number, source in enumerate(reader, 2):
+                raw = float(_pick(source, "frame", "frame_id", "frame_number"))
+                if not raw.is_integer():
+                    raise ValueError(f"Invalid frame on line {number}")
+                key = (int(raw) + frame_offset, _pick(source, "track_id", "player_id", "id"))
+                if key in seen:
+                    raise ValueError(f"Duplicate frame and track on line {number}")
+                seen.add(key)
+                if key not in lookup:
+                    raise ValueError(f"Line {number} does not match this tracking run. Check the video, track IDs and frame offset.")
+                values = {k: v for k, v in source.items() if k and k.casefold() not in keys and v not in (None, "")}
+                if not values:
+                    raise ValueError(f"No measurements on line {number}")
+                pending.append((lookup[key], values))
+        if not pending:
+            raise ValueError("The file has no measurements")
+        for row, values in pending:
+            row.extras.update(values)
+        self.team_data_sources.append({"file": Path(path).name, "frame_offset": frame_offset, "rows": len(pending)})
+        return len(pending)
 
     def load_csv(self, path: str | Path) -> None:
         csv_path = Path(path)
@@ -80,7 +111,18 @@ class ReviewProject:
         chosen = stable_id.strip()
         if not chosen:
             raise ValueError("Enter an identity name first")
-        for track_id in track_ids:
+        selected = set(track_ids)
+        if len(selected) < 2:
+            raise ValueError("Select at least two tracks")
+        if not selected.issubset(self.tracks):
+            raise ValueError("A selected track is no longer available")
+        members = selected | {key for key, value in self.manual_merges.items() if value == chosen}
+        tracks = [self.tracks[key] for key in members]
+        for index, left in enumerate(tracks):
+            for right in tracks[index + 1:]:
+                if max(left.first_frame, right.first_frame) <= min(left.last_frame, right.last_frame):
+                    raise ValueError("These tracks overlap in time. Review them separately before merging.")
+        for track_id in selected:
             self.manual_merges[track_id] = chosen
         self.resolve_identities()
 
@@ -102,7 +144,7 @@ class ReviewProject:
                     and not (peer.last_frame < track.first_frame or track.last_frame < peer.first_frame)
                     for peer in peers
                 )
-                track.stable_id = f"{candidate} review" if has_overlap else candidate
+                track.stable_id = f"{candidate} track {track.track_id} review" if has_overlap else candidate
             else:
                 track.stable_id = f"Track {track.track_id}"
 
@@ -134,9 +176,42 @@ class ReviewProject:
             "manual_merges": self.manual_merges,
             "tracks": [asdict(track) for track in self.tracks.values()],
             "events": [asdict(event) for event in self.events],
+            "rows": [asdict(row) for row in self.rows],
+            "camera_analysis": self.camera_analysis,
+            "team_data_sources": self.team_data_sources,
         }
         project_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        return {"tracks": tracks_path, "events": events_path, "project": project_path}
+        measurements_path = target / "reviewed_detections.csv"
+        extra_keys = sorted({key for row in self.rows for key in row.extras})
+        fields = [key for key in TrackRow.__dataclass_fields__ if key != "extras"] + ["stable_id"]
+        with measurements_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields + [f"imported_{key}" for key in extra_keys])
+            writer.writeheader()
+            for row in self.rows:
+                values = asdict(row)
+                values.pop("extras")
+                values["stable_id"] = self.tracks[row.track_id].stable_id
+                values.update({f"imported_{key}": value for key, value in row.extras.items()})
+                writer.writerow(values)
+        return {"tracks": tracks_path, "events": events_path, "project": project_path, "detections": measurements_path}
+
+    @classmethod
+    def restore(cls, path: str | Path) -> "ReviewProject":
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        project = cls(**{key: data.get(key, "") for key in
+                         ("video_path", "annotated_video_path", "csv_path", "model_path")})
+        project.fps = float(data.get("fps", 25))
+        if "rows" in data:
+            project.rows = [TrackRow(**row) for row in data["rows"]]
+        else:
+            project.load_csv(project.csv_path)
+        project.tracks = {row["track_id"]: TrackSummary(**row) for row in data["tracks"]}
+        project.events = [ReviewEvent(**row) for row in data["events"]]
+        project.manual_merges = data.get("manual_merges", {})
+        project.camera_analysis = data.get("camera_analysis", {})
+        project.team_data_sources = data.get("team_data_sources", [])
+        project.resolve_identities()
+        return project
 
 
 def _pick(row: dict[str, str], *names: str, default: str = "") -> str:
@@ -162,6 +237,9 @@ def read_tracking_csv(path: Path) -> list[TrackRow]:
                     y1=float(_pick(source, "y1", default="0")),
                     x2=float(_pick(source, "x2", default="0")),
                     y2=float(_pick(source, "y2", default="0")),
+                    extras={k: v for k, v in source.items() if k and k.casefold() not in {
+                        "frame", "frame_id", "frame_number", "track_id", "player_id", "id", "class", "class_name", "label",
+                        "confidence", "conf", "x1", "y1", "x2", "y2"} and v not in (None, "")},
                 ))
             except ValueError as exc:
                 raise ValueError(f"Invalid tracking value on CSV line {line_number}") from exc

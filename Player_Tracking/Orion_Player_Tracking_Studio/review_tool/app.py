@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import queue
+import json
+import tempfile
+import time
 import threading
 import tkinter as tk
 from collections import defaultdict
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from .core import ReviewProject, TrackRow, find_review_events, run_ocr
+from .core import ReviewProject, TrackRow, ReviewEvent, format_timestamp, find_review_events, run_ocr
+from .camera import analyze_camera
+from .guide import build_guide
 from .tracking import inspect_model, track_video
 from .vision import extract_track_crops, suggest_teams
 
 
 ROOT = Path(__file__).resolve().parent.parent
-ACCENT = "#2f6fed"
+ACCENT = "#287568"
 NAVY = "#172033"
 PALE = "#f4f7fb"
 MUTED = "#64748b"
@@ -31,9 +36,14 @@ class VideoPanel(ttk.Frame):
         self.rows_by_frame: dict[int, list[TrackRow]] = {}
         self.image_ref = None
         self.updating_scale = False
+        self.timer = None
+        self.current_frame = 0
+        self.coverage_end = 0
+        self.labels = {}
 
         self.canvas = tk.Canvas(self, background="#0b1020", highlightthickness=0, height=470)
         self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", self._resize)
         controls = ttk.Frame(self)
         controls.pack(fill="x", pady=(8, 0))
         self.play_button = ttk.Button(controls, text="Play", command=self.toggle, width=9)
@@ -42,6 +52,19 @@ class VideoPanel(ttk.Frame):
         self.scale.pack(side="left", fill="x", expand=True, padx=10)
         self.time_label = ttk.Label(controls, text="00:00 / 00:00")
         self.time_label.pack(side="right")
+        self.coverage_label = ttk.Label(self, text="", foreground=MUTED)
+        self.coverage_label.pack(fill="x", pady=4)
+
+    def pause(self):
+        self.playing = False
+        self.play_button.configure(text="Play")
+        if self.timer is not None:
+            self.after_cancel(self.timer)
+            self.timer = None
+
+    def _resize(self, _event=None):
+        if self.capture and not self.playing:
+            self.show_frame(self.current_frame)
 
     def load(self, path: str, rows: list[TrackRow], fps: float | None = None) -> None:
         try:
@@ -49,17 +72,21 @@ class VideoPanel(ttk.Frame):
         except ImportError as exc:
             messagebox.showerror("Video unavailable", "OpenCV is needed to play video inside the app.")
             raise exc
+        self.pause()
         if self.capture:
             self.capture.release()
         self.path = path
         self.capture = cv2.VideoCapture(path)
         self.fps = fps or self.capture.get(cv2.CAP_PROP_FPS) or 25
         self.total = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        if not self.capture.isOpened() or self.total <= 0:
+            raise ValueError("Cannot play this video")
         self.scale.configure(to=max(1, self.total - 1))
         grouped: defaultdict[int, list[TrackRow]] = defaultdict(list)
         for row in rows:
             grouped[row.frame].append(row)
         self.rows_by_frame = dict(grouped)
+        self.coverage_end = max(grouped, default=-1) + 1
         self.show_frame(0)
 
     def show_frame(self, frame_number: int) -> None:
@@ -69,18 +96,19 @@ class VideoPanel(ttk.Frame):
         from PIL import Image, ImageTk
 
         frame_number = max(0, min(int(frame_number), max(0, self.total - 1)))
-        self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        if int(self.capture.get(cv2.CAP_PROP_POS_FRAMES)) != frame_number:
+            self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
         ok, frame = self.capture.read()
         if not ok:
             return
         for row in self.rows_by_frame.get(frame_number, []):
             x1, y1, x2, y2 = map(int, (row.x1, row.y1, row.x2, row.y2))
             cv2.rectangle(frame, (x1, y1), (x2, y2), (50, 220, 120), 2)
-            cv2.putText(frame, f"{row.class_name} {row.track_id}", (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (50, 220, 120), 2)
+            cv2.putText(frame, self.labels.get(row.track_id, f"{row.class_name} {row.track_id}"), (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (50, 220, 120), 2)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(frame)
-        canvas_width = max(640, self.canvas.winfo_width())
-        canvas_height = max(360, self.canvas.winfo_height())
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
         image.thumbnail((canvas_width, canvas_height))
         self.image_ref = ImageTk.PhotoImage(image)
         self.canvas.delete("all")
@@ -89,6 +117,12 @@ class VideoPanel(ttk.Frame):
         self.scale.set(frame_number)
         self.updating_scale = False
         self.time_label.configure(text=f"{self._time(frame_number)} / {self._time(self.total)}")
+        self.current_frame = frame_number
+        self.coverage_label.configure(text=(
+            "No tracking coverage recorded here. Run analysis for this section."
+            if frame_number >= self.coverage_end else
+            f"Frame {frame_number + 1:,}   Boxes {len(self.rows_by_frame.get(frame_number, []))}"
+        ))
         if self.on_frame:
             self.on_frame(frame_number)
 
@@ -103,21 +137,29 @@ class VideoPanel(ttk.Frame):
     def toggle(self) -> None:
         if not self.capture:
             return
-        self.playing = not self.playing
+        if self.playing:
+            self.pause()
+            return
+        if self.current_frame >= self.total - 1:
+            self.show_frame(0)
+        self.playing = True
         self.play_button.configure(text="Pause" if self.playing else "Play")
         if self.playing:
             self._tick()
 
     def _tick(self) -> None:
+        self.timer = None
         if not self.playing or not self.capture:
             return
-        current = int(float(self.scale.get())) + 1
+        started = time.monotonic()
+        current = self.current_frame + 1
         if current >= self.total:
             self.playing = False
             self.play_button.configure(text="Play")
             return
         self.show_frame(current)
-        self.after(max(10, int(1000 / max(1, self.fps))), self._tick)
+        delay = max(1, int(1000 / max(1, self.fps) - 1000 * (time.monotonic() - started)))
+        self.timer = self.after(delay, self._tick)
 
 
 class PlayerTrackingReview(tk.Tk):
@@ -130,9 +172,11 @@ class PlayerTrackingReview(tk.Tk):
         self.project = ReviewProject()
         self.crops: dict[str, list[Path]] = {}
         self.cancel_event = threading.Event()
+        self.busy = False
         self.messages: queue.Queue = queue.Queue()
         self._make_style()
         self._make_layout()
+        self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll_messages)
 
     def _make_style(self) -> None:
@@ -146,7 +190,7 @@ class PlayerTrackingReview(tk.Tk):
         style.configure("Title.TLabel", background=PALE, foreground=NAVY, font=("Arial", 24, "bold"))
         style.configure("Heading.TLabel", background="white", foreground=NAVY, font=("Arial", 15, "bold"))
         style.configure("Accent.TButton", font=("Arial", 11, "bold"), foreground="white", background=ACCENT, padding=8)
-        style.map("Accent.TButton", background=[("active", "#255ac0")])
+        style.map("Accent.TButton", background=[("active", "#205f55")])
         style.configure("Treeview", rowheight=29, font=("Arial", 10))
         style.configure("Treeview.Heading", font=("Arial", 10, "bold"))
 
@@ -169,10 +213,14 @@ class PlayerTrackingReview(tk.Tk):
         self.tabs.add(self.review_tab, text="Review")
         self.tabs.add(self.identity_tab, text="Players")
         self.tabs.add(self.results_tab, text="Results")
+        self.guide_tab = ttk.Frame(self.tabs, padding=16)
+        self.tabs.add(self.guide_tab, text="Guide")
         self._make_start()
         self._make_review()
         self._make_identities()
         self._make_results()
+        self.guide_body, self.guide_selector = build_guide(self.guide_tab, self.tabs, {
+            "Start": self.start_tab, "Review": self.review_tab, "Players": self.identity_tab, "Results": self.results_tab})
 
         footer = ttk.Frame(self)
         footer.pack(fill="x", padx=24, pady=(0, 12))
@@ -185,28 +233,32 @@ class PlayerTrackingReview(tk.Tk):
         card.pack(fill="x")
         ttk.Label(card, text="Start with a video", style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 14))
         ttk.Label(card, text="Video", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=8)
-        self.video_var = tk.StringVar()
+        included_video = ROOT.parent / "demo" / "sample_match.mp4"
+        self.video_var = tk.StringVar(value=str(included_video) if included_video.exists() else "")
         ttk.Entry(card, textvariable=self.video_var).grid(row=1, column=1, sticky="ew", padx=12)
         ttk.Button(card, text="Choose video", command=self._choose_video).grid(row=1, column=2)
         ttk.Label(card, text="Model", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=8)
-        self.model_var = tk.StringVar()
+        included_model = ROOT.parent / "models" / "afl_player_ref.pt"
+        self.model_var = tk.StringVar(value=str(included_model) if included_model.exists() else "")
         ttk.Entry(card, textvariable=self.model_var).grid(row=2, column=1, sticky="ew", padx=12)
         ttk.Button(card, text="Choose model", command=self._choose_model).grid(row=2, column=2)
         ttk.Label(card, text="Tracking CSV", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=8)
-        self.csv_var = tk.StringVar()
+        included_csv = ROOT.parent / "demo" / "sample_match.csv"
+        self.csv_var = tk.StringVar(value=str(included_csv) if included_csv.exists() else "")
         ttk.Entry(card, textvariable=self.csv_var).grid(row=3, column=1, sticky="ew", padx=12)
         ttk.Button(card, text="Choose CSV", command=self._choose_csv).grid(row=3, column=2)
         ttk.Label(card, text="Tracker", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=8)
         self.tracker_var = tk.StringVar(value="ByteTrack")
         ttk.Combobox(card, textvariable=self.tracker_var, values=["ByteTrack", "BoTSORT"], state="readonly", width=18).grid(row=4, column=1, sticky="w", padx=12)
         ttk.Label(card, text="Frame limit", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=8)
-        self.limit_var = tk.StringVar(value="")
+        self.limit_var = tk.StringVar(value="900")
         ttk.Entry(card, textvariable=self.limit_var, width=20).grid(row=5, column=1, sticky="w", padx=12)
         card.columnconfigure(1, weight=1)
 
         actions = ttk.Frame(self.start_tab)
         actions.pack(fill="x", pady=18)
         ttk.Button(actions, text="Run sample match", command=self._run_sample).pack(side="left")
+        ttk.Button(actions, text="Open saved review", command=self._restore_review).pack(side="left", padx=8)
         ttk.Button(actions, text="Load existing results", command=self._load_existing).pack(side="right", padx=(10, 0))
         ttk.Button(actions, text="Start analysis", style="Accent.TButton", command=self._start_tracking).pack(side="right")
         ttk.Button(actions, text="Stop", command=self._stop_tracking).pack(side="right", padx=(0, 10))
@@ -217,7 +269,7 @@ class PlayerTrackingReview(tk.Tk):
         self.stage_label.pack(anchor="w")
         self.progress = ttk.Progressbar(progress_card, mode="determinate")
         self.progress.pack(fill="x", pady=(12, 0))
-        ttk.Label(progress_card, text="The selected model decides which classes can be detected. All team and jumper results can be reviewed before export.", style="Card.TLabel", foreground=MUTED, wraplength=900).pack(anchor="w", pady=(12, 0))
+        ttk.Label(progress_card, text="Included model: PLAYER and REF. It does not identify club names or real player identities. Review suggestions before export. Clear the frame limit to process the full video.", style="Card.TLabel", foreground=MUTED, wraplength=900).pack(anchor="w", pady=(12, 0))
 
     def _make_review(self) -> None:
         pane = ttk.Panedwindow(self.review_tab, orient="horizontal")
@@ -226,14 +278,26 @@ class PlayerTrackingReview(tk.Tk):
         right = ttk.Frame(pane, style="Card.TFrame", padding=12)
         pane.add(left, weight=3)
         pane.add(right, weight=2)
-        self.video_panel = VideoPanel(left)
+        self.video_panel = VideoPanel(left, on_frame=self._show_team_data)
         self.video_panel.pack(fill="both", expand=True)
+        data_actions = ttk.Frame(left)
+        data_actions.pack(fill="x")
+        ttk.Button(data_actions, text="Team data", command=self._import_team_data).pack(side="left")
+        ttk.Button(data_actions, text="Check camera motion", command=self._check_camera).pack(side="left", padx=8)
+        ttk.Label(left, text="Imported measurements need review", foreground=MUTED).pack(anchor="w")
+        self.data_tree = ttk.Treeview(left, columns=("track", "field", "value"), show="headings", height=4)
+        for key, title in (("track", "Track"), ("field", "Measurement"), ("value", "Value")):
+            self.data_tree.heading(key, text=title)
+            self.data_tree.column(key, width=120)
+        self.data_tree.pack(fill="x")
+        self.data_tree.bind("<MouseWheel>", lambda event: self.data_tree.yview_scroll(-1 if event.delta > 0 else 1, "units"))
         ttk.Label(right, text="Problem timestamps", style="Heading.TLabel").pack(anchor="w", pady=(0, 8))
         self.event_tree = ttk.Treeview(right, columns=("time", "kind", "status"), show="headings", selectmode="browse")
         for column, text, width in (("time", "Time", 75), ("kind", "Issue", 180), ("status", "Status", 100)):
             self.event_tree.heading(column, text=text)
             self.event_tree.column(column, width=width, anchor="w")
         self.event_tree.pack(fill="both", expand=True)
+        self.event_tree.bind("<MouseWheel>", lambda event: self.event_tree.yview_scroll(-1 if event.delta > 0 else 1, "units"))
         self.event_tree.bind("<<TreeviewSelect>>", self._jump_to_event)
         self.event_detail = ttk.Label(right, text="Select an item to review it.", style="Card.TLabel", wraplength=360)
         self.event_detail.pack(fill="x", pady=10)
@@ -258,6 +322,7 @@ class PlayerTrackingReview(tk.Tk):
             self.track_tree.heading(column, text=text)
             self.track_tree.column(column, width=width, anchor="w")
         self.track_tree.pack(fill="both", expand=True)
+        self.track_tree.bind("<MouseWheel>", lambda event: self.track_tree.yview_scroll(-1 if event.delta > 0 else 1, "units"))
         self.track_tree.bind("<<TreeviewSelect>>", self._load_track_editor)
 
         ttk.Label(editor, text="Review player", style="Heading.TLabel").pack(anchor="w")
@@ -286,17 +351,23 @@ class PlayerTrackingReview(tk.Tk):
         ttk.Button(self.results_tab, text="Export results", style="Accent.TButton", command=self._export).pack(anchor="w", pady=22)
 
     def _choose_video(self) -> None:
+        if self.busy:
+            return
         path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv"), ("All files", "*")])
         if path:
             self.video_var.set(path)
 
     def _choose_model(self) -> None:
+        if self.busy:
+            return
         path = filedialog.askopenfilename(filetypes=[("Model files", "*.pt *.onnx"), ("All files", "*")])
         if path:
             self.model_var.set(path)
             self._inspect_model(path)
 
     def _choose_csv(self) -> None:
+        if self.busy:
+            return
         path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("All files", "*")])
         if path:
             self.csv_var.set(path)
@@ -311,6 +382,8 @@ class PlayerTrackingReview(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _start_tracking(self) -> None:
+        if self.busy:
+            return
         video = self.video_var.get().strip()
         model = self.model_var.get().strip()
         if not video or not model:
@@ -318,12 +391,16 @@ class PlayerTrackingReview(tk.Tk):
             return
         try:
             limit = int(self.limit_var.get()) if self.limit_var.get().strip() else None
+            if limit is not None and limit <= 0:
+                raise ValueError()
         except ValueError:
-            messagebox.showerror("Frame limit", "Enter a whole number or leave the frame limit empty.")
+            messagebox.showerror("Frame limit", "Enter a positive whole number or leave the frame limit empty.")
             return
         tracker = "bytetrack.yaml" if self.tracker_var.get() == "ByteTrack" else "botsort.yaml"
         self.progress.configure(value=0)
         self.cancel_event.clear()
+        self.busy = True
+        self.stage_label.configure(text="Loading model. This may take a moment.")
 
         def progress(done: int, total: int, stage: str) -> None:
             self.messages.put(("progress", done, total, stage))
@@ -341,6 +418,8 @@ class PlayerTrackingReview(tk.Tk):
         self.stage_label.configure(text="Stopping after the current frame")
 
     def _load_existing(self) -> None:
+        if self.busy:
+            return
         video = self.video_var.get().strip()
         csv_path = self.csv_var.get().strip()
         if not video or not csv_path:
@@ -349,8 +428,10 @@ class PlayerTrackingReview(tk.Tk):
         self._open_project(video, csv_path, self.model_var.get().strip())
 
     def _run_sample(self) -> None:
-        sample_video = ROOT / "outputs" / "sample_match.mp4"
-        sample_csv = ROOT / "outputs" / "sample_match.csv"
+        if self.busy:
+            return
+        sample_video = ROOT.parent / "demo" / "sample_match.mp4"
+        sample_csv = ROOT.parent / "demo" / "sample_match.csv"
         if not sample_video.exists():
             messagebox.showinfo("Sample match", "Add sample_match.mp4 to the outputs folder, or choose your own video.")
             return
@@ -366,6 +447,8 @@ class PlayerTrackingReview(tk.Tk):
 
     def _open_project(self, video: str, csv_path: str, model: str = "", fps: float | None = None) -> None:
         try:
+            self.crops = {}
+            self.video_panel.labels = {}
             self.project = ReviewProject(video_path=video, model_path=model, fps=fps or 25.0)
             self.project.load_csv(csv_path)
             try:
@@ -378,6 +461,10 @@ class PlayerTrackingReview(tk.Tk):
             except Exception:
                 pass
             self.video_panel.load(video, self.project.rows, self.project.fps)
+            metadata = Path(csv_path).with_suffix(".json")
+            if metadata.exists():
+                details = json.loads(metadata.read_text())
+                self.video_panel.coverage_end = int(details.get("processed_frames", self.video_panel.coverage_end))
             self._refresh_events()
             self._refresh_tracks()
             self._refresh_results()
@@ -385,6 +472,8 @@ class PlayerTrackingReview(tk.Tk):
             self.stage_label.configure(text="Review ready")
             self.progress.configure(value=100)
             self.footer_status.configure(text=f"Loaded {len(self.project.rows):,} detections")
+            if self.video_panel.coverage_end < self.video_panel.total:
+                self.stage_label.configure(text=f"Partial tracking: {self.video_panel.coverage_end:,} of {self.video_panel.total:,} video frames. Untracked sections have no boxes.")
         except Exception as exc:
             messagebox.showerror("Could not load results", str(exc))
 
@@ -393,14 +482,58 @@ class PlayerTrackingReview(tk.Tk):
         for index, event in enumerate(self.project.events):
             self.event_tree.insert("", "end", iid=str(index), values=(event.timestamp, event.kind, event.status))
 
+    def _show_team_data(self, frame):
+        if not hasattr(self, "data_tree"):
+            return
+        self.data_tree.delete(*self.data_tree.get_children())
+        for row in self.video_panel.rows_by_frame.get(frame, []):
+            for key, value in row.extras.items():
+                self.data_tree.insert("", "end", values=(row.track_id, key, value))
+
+    def _import_team_data(self):
+        if self.busy or not self.project.rows:
+            return
+        path = filedialog.askopenfilename(title="Team data", filetypes=[("CSV files", "*.csv")])
+        if not path:
+            return
+        if not messagebox.askyesno("Match tracking run", "Does this file use the same video and original track IDs? Matching ID numbers from a different run are not sufficient. Existing imported values with the same names will be replaced."):
+            return
+        offset = simpledialog.askinteger("Frame offset", "Frames to add to imported frame numbers. Use 0 for matching frames, or -1 for a one based file paired with zero based tracking.", initialvalue=0)
+        if offset is None:
+            return
+        try:
+            count = self.project.import_team_data(path, offset)
+            self._show_team_data(self.video_panel.current_frame)
+            self._refresh_results()
+            self.footer_status.configure(text=f"Loaded measurements for {count:,} detections")
+        except Exception as exc:
+            messagebox.showerror("Could not import team data", str(exc))
+
+    def _check_camera(self):
+        if self.busy or not self.project.rows:
+            return
+        limit = simpledialog.askinteger("Camera motion", "Frames to check from the start of this video. Results estimate image motion, not player speed or confirmed camera cuts.", initialvalue=min(300, self.video_panel.total), minvalue=2, maxvalue=self.video_panel.total)
+        if limit is None:
+            return
+        self.busy = True
+        self.cancel_event.clear()
+        video = self.project.video_path
+        def work():
+            try:
+                result = analyze_camera(video, limit, self.cancel_event,
+                    lambda done, total, stage: self.messages.put(("progress", done, total, stage)))
+                self.messages.put(("camera_done", result))
+            except Exception as exc:
+                self.messages.put(("error", str(exc)))
+        threading.Thread(target=work, daemon=True).start()
+
     def _jump_to_event(self, _event=None) -> None:
         selection = self.event_tree.selection()
         if not selection:
             return
         event = self.project.events[int(selection[0])]
         self.event_detail.configure(text=event.detail)
-        self.video_panel.playing = False
-        self.video_panel.play_button.configure(text="Play")
+        self.video_panel.pause()
         self.video_panel.show_frame(event.frame)
 
     def _set_event_status(self, status: str) -> None:
@@ -413,6 +546,7 @@ class PlayerTrackingReview(tk.Tk):
         self._refresh_results()
 
     def _refresh_tracks(self) -> None:
+        self.video_panel.labels = {key: (f"{track.team} {track.jumper}  {key}" if track.team != "Unassigned" or track.jumper else f"{track.class_name} {key}") for key, track in self.project.tracks.items()}
         self.track_tree.delete(*self.track_tree.get_children())
         for track_id, track in sorted(self.project.tracks.items(), key=lambda item: (int(item[0]) if item[0].isdigit() else 10**9, item[0])):
             self.track_tree.insert("", "end", iid=track_id, values=(track_id, track.class_name, track.team, track.jumper, track.stable_id, track.detections))
@@ -424,8 +558,12 @@ class PlayerTrackingReview(tk.Tk):
         track = self.project.tracks[selection[0]]
         self.team_var.set(track.team)
         self.jumper_var.set(track.jumper)
+        self.video_panel.pause()
+        self.video_panel.show_frame(track.first_frame)
 
     def _save_track(self) -> None:
+        if self.busy:
+            return
         selection = self.track_tree.selection()
         if not selection:
             messagebox.showinfo("Select a track", "Select a track first.")
@@ -435,15 +573,20 @@ class PlayerTrackingReview(tk.Tk):
             self.project.set_track_value(track_id, "jumper", self.jumper_var.get())
         self._refresh_tracks()
         self._refresh_results()
+        self.video_panel.show_frame(self.video_panel.current_frame)
 
     def _ensure_crops(self) -> dict[str, list[Path]]:
         if not self.crops:
-            self.crops = extract_track_crops(self.project.video_path, self.project.rows, ROOT / "outputs" / "review_crops", progress=lambda text: self.messages.put(("status", text)))
+            folder = ROOT / "outputs" / "review_crops"
+            folder.mkdir(parents=True, exist_ok=True)
+            self.crops = extract_track_crops(self.project.video_path, self.project.rows, tempfile.mkdtemp(dir=folder), progress=lambda text: self.messages.put(("status", text)))
         return self.crops
 
     def _analyse_teams(self) -> None:
-        if not self.project.rows:
+        if self.busy or not self.project.rows:
             return
+        self.busy = True
+        self.footer_status.configure(text="Preparing team suggestions")
         def work() -> None:
             try:
                 crops = self._ensure_crops()
@@ -455,8 +598,10 @@ class PlayerTrackingReview(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _read_jumpers(self) -> None:
-        if not self.project.rows:
+        if self.busy or not self.project.rows:
             return
+        self.busy = True
+        self.footer_status.configure(text="Reading jumper numbers. Please wait.")
         def work() -> None:
             try:
                 answers = run_ocr(self._ensure_crops(), progress=lambda text: self.messages.put(("status", text)))
@@ -466,6 +611,8 @@ class PlayerTrackingReview(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _merge_tracks(self) -> None:
+        if self.busy:
+            return
         selection = self.track_tree.selection()
         try:
             self.project.merge_tracks(selection, self.merge_var.get())
@@ -483,7 +630,7 @@ class PlayerTrackingReview(tk.Tk):
         reviewed_events = sum(event.status != "Needs review" for event in self.project.events)
         values = [
             ("Temporary tracks", len(tracks)),
-            ("Player identities", len(stable)),
+            ("Identity groups", len(stable)),
             ("Problem timestamps", len(self.project.events)),
             ("Reviewed issues", reviewed_events),
         ]
@@ -496,8 +643,20 @@ class PlayerTrackingReview(tk.Tk):
         self.summary_label.configure(text="Tracking review summary")
         output_text = f" The annotated video is saved at {self.project.annotated_video_path}." if self.project.annotated_video_path else ""
         self.result_detail.configure(text="The export keeps the original temporary track IDs, reviewed team and jumper values, resolved player identities and every problem timestamp decision." + output_text)
+        extra = f" Imported measurements: {sum(bool(row.extras) for row in self.project.rows):,} detections. Per frame values are included in reviewed_detections.csv."
+        camera = self.project.camera_analysis
+        if camera:
+            extra += f" Camera check: {camera['processed_frames']:,} frames, {len(camera['records']):,} usable estimates."
+            if camera.get("mean") is not None:
+                extra += f" Mean image translation {camera['mean']:.2f} pixels per frame."
+            if camera.get("stopped"):
+                extra += " The check ended early."
+        self.result_detail.configure(text=self.result_detail.cget("text") + extra)
 
     def _export(self) -> None:
+        if self.busy:
+            messagebox.showinfo("Work in progress", "Wait for the current action to finish before exporting.")
+            return
         if not self.project.rows:
             messagebox.showinfo("Nothing to export", "Load tracking results first.")
             return
@@ -506,6 +665,36 @@ class PlayerTrackingReview(tk.Tk):
             paths = self.project.export(folder)
             messagebox.showinfo("Export complete", f"Saved reviewed tracks, events and project data in\n{Path(folder)}")
             self.footer_status.configure(text=f"Exported {len(paths)} files")
+
+    def _restore_review(self):
+        if self.busy:
+            return
+        path = filedialog.askopenfilename(filetypes=[("Saved review", "*.json")])
+        if not path:
+            return
+        try:
+            project = ReviewProject.restore(path)
+            self.video_panel.load(project.video_path, project.rows, project.fps)
+            self.project = project
+            self.crops = {}
+            self._refresh_tracks()
+            self._refresh_events()
+            self._refresh_results()
+            self.tabs.select(self.review_tab)
+            self.footer_status.configure(text="Saved review restored")
+        except Exception as exc:
+            messagebox.showerror("Could not restore review", str(exc))
+
+    def _close(self):
+        if self.busy:
+            messagebox.showinfo("Work in progress", "Stop the tracking run or wait for suggestions to finish before closing.")
+            return
+        if self.project.rows and not messagebox.askyesno("Close review", "Export results to keep your corrections. Close now?"):
+            return
+        self.video_panel.pause()
+        if self.video_panel.capture:
+            self.video_panel.capture.release()
+        self.destroy()
 
     def _show_credits(self) -> None:
         window = tk.Toplevel(self)
@@ -522,7 +711,8 @@ class PlayerTrackingReview(tk.Tk):
             "Sri Bandara   model and tracking scripts\n"
             "Matthew Lewis   team colour tracking and jumper data collection\n"
             "Hasini Siddu   crop extraction and OCR testing\n"
-            "Yash Talati   tracking diagnostics and ID stability\n"
+            "Yash Talati   tracking diagnostics, ID stability and camera motion\n"
+            "Drew Neeling   movement data format compatibility\n"
             "Lê Đông Quân   jersey colour service"
         )
         ttk.Label(frame, text=text, style="Card.TLabel", justify="left", wraplength=460).pack(anchor="w")
@@ -541,6 +731,7 @@ class PlayerTrackingReview(tk.Tk):
                     self.progress.configure(value=100 * done / max(1, total))
                     self.stage_label.configure(text=f"{stage}   {done:,} of {total:,} frames")
                 elif kind == "tracking_done":
+                    self.busy = False
                     _, source_video, annotated_video, csv_path, fps, model = message
                     self.video_var.set(source_video)
                     self.csv_var.set(csv_path)
@@ -548,18 +739,36 @@ class PlayerTrackingReview(tk.Tk):
                     self.project.annotated_video_path = annotated_video
                     self._refresh_results()
                 elif kind == "teams_done":
+                    self.busy = False
                     for track_id, team in message[1].items():
-                        self.project.set_track_value(track_id, "team", team)
+                        if self.project.tracks[track_id].team == "Unassigned":
+                            self.project.set_track_value(track_id, "team", team)
                     self._refresh_tracks()
                     self._refresh_results()
                     self.footer_status.configure(text="Team suggestions ready for review")
+                elif kind == "camera_done":
+                    self.busy = False
+                    result = message[1]
+                    self.project.camera_analysis = result
+                    prior = {(event.kind, event.frame): event.status for event in self.project.events}
+                    self.project.events = [event for event in self.project.events if event.kind != "Camera motion"]
+                    for record in sorted(result["records"], key=lambda row: row["motion"], reverse=True)[:10]:
+                        frame = record["frame"]
+                        self.project.events.append(ReviewEvent("Camera motion", frame, format_timestamp(frame, result["fps"]),
+                            f"Image translation {record['motion']:.2f} pixels per frame. One of the largest measured values in this check, not a confirmed tracking error or camera cut.", prior.get(("Camera motion", frame), "Needs review")))
+                    self._refresh_events()
+                    self._refresh_results()
+                    self.footer_status.configure(text=f"Camera check: {len(result['records']):,} usable estimates across {result['processed_frames']:,} frames" + (". Stopped early." if result['stopped'] else ""))
                 elif kind == "ocr_done":
+                    self.busy = False
                     for track_id, jumper in message[1].items():
-                        self.project.set_track_value(track_id, "jumper", jumper)
+                        if not self.project.tracks[track_id].jumper:
+                            self.project.set_track_value(track_id, "jumper", jumper)
                     self._refresh_tracks()
                     self._refresh_results()
-                    self.footer_status.configure(text="Jumper suggestions ready for review")
+                    self.footer_status.configure(text=f"Jumper suggestions: {len(message[1])}. Review before export." if message[1] else "No readable jumper numbers found. Enter them manually.")
                 elif kind == "error":
+                    self.busy = False
                     messagebox.showerror("Could not complete the action", message[1])
                     self.footer_status.configure(text="Action stopped")
         except queue.Empty:
