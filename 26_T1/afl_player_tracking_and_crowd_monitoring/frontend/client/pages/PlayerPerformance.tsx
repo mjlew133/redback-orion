@@ -1,3 +1,4 @@
+import { getAccessToken } from "@/lib/auth";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -258,10 +259,7 @@ export default function PlayerPerformance() {
       any[]
     >([]);
 
-  const token =
-    localStorage.getItem("accessToken") ||
-    localStorage.getItem("access_token") ||
-    localStorage.getItem("authToken");
+  const token = getAccessToken();
 
   const [
     jobStatus,

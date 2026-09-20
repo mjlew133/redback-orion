@@ -1,13 +1,11 @@
+import { getAccessToken } from "./auth";
 import { getFriendlyErrorMessage } from "./errors";
 
 export async function apiRequest(
   url: string,
   options: RequestInit = {},
 ) {
-  const token =
-    localStorage.getItem("accessToken") ||
-    localStorage.getItem("access_token") ||
-    localStorage.getItem("authToken");
+  const token = getAccessToken();
 
   const isFormData = options.body instanceof FormData;
 

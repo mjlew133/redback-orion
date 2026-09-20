@@ -1,3 +1,5 @@
+import ConfirmLogout from "@/components/ConfirmLogout";
+import { getFriendlyThrownMessage } from "../lib/errors";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { downloadText, downloadFile } from "@/lib/download";
@@ -83,6 +85,8 @@ import {
 } from "lucide-react";
 import MobileNavigation from "@/components/MobileNavigation";
 import { BACKEND_URL } from "../lib/config";
+import { getAccessToken } from "../lib/auth";
+import { VIDEO_STATE_KEY, clearVideoState } from "../lib/videoState";
 
 type BackendStatusResponse = {
   job_id: string;
@@ -95,10 +99,42 @@ type BackendStatusResponse = {
   detail?: string;
 };
 
-const getAccessToken = () =>
-  localStorage.getItem("accessToken") ||
-  localStorage.getItem("access_token") ||
-  localStorage.getItem("authToken");
+
+// Keeps the video upload/analysis status when the user visits another page and
+// comes back. Stored per browser tab (sessionStorage) and per signed-in user.
+
+const currentUserKey = () => localStorage.getItem("userEmail") || "";
+
+const loadVideoState = (): any | null => {
+  try {
+    const raw = sessionStorage.getItem(VIDEO_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Only restore for the same user AND the same login session
+    return parsed &&
+      parsed.user === currentUserKey() &&
+      parsed.token === (getAccessToken() || "")
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveVideoState = (state: Record<string, unknown>) => {
+  try {
+    sessionStorage.setItem(
+      VIDEO_STATE_KEY,
+      JSON.stringify({
+        ...state,
+        user: currentUserKey(),
+        token: getAccessToken() || "",
+      }),
+    );
+  } catch {
+    // storage unavailable - status simply won't persist
+  }
+};
 
 type DashboardPlayer = {
   id: number;
@@ -314,16 +350,34 @@ export default function AFLDashboard() {
   const ENABLE_LIVE_FEATURES = false;
 
   // Video upload states
+  // Restore status saved before the user navigated away (see saveVideoState)
+  const [persistedVideo] = useState(loadVideoState);
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
+  // The File object itself can't be restored, so remember its name and size
+  const [restoredFileMeta, setRestoredFileMeta] = useState<{
+    name: string;
+    size: number;
+  } | null>(persistedVideo?.fileMeta ?? null);
   const [isVideoUploading, setIsVideoUploading] = useState(false);
   const [videoUploadProgress, setVideoUploadProgress] = useState(0);
-  const [isVideoAnalyzing, setIsVideoAnalyzing] = useState(false);
-  const [videoAnalysisProgress, setVideoAnalysisProgress] = useState(0);
-  const [videoAnalysisComplete, setVideoAnalysisComplete] = useState(false);
-  const [videoAnalysisError, setVideoAnalysisError] = useState<string | null>(
-    null,
+  const [isVideoAnalyzing, setIsVideoAnalyzing] = useState(
+    persistedVideo?.isVideoAnalyzing ?? false,
   );
-  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [videoAnalysisProgress, setVideoAnalysisProgress] = useState(
+    persistedVideo?.videoAnalysisProgress ?? 0,
+  );
+  const [videoAnalysisComplete, setVideoAnalysisComplete] = useState(
+    persistedVideo?.videoAnalysisComplete ?? false,
+  );
+  const [videoAnalysisError, setVideoAnalysisError] = useState<string | null>(
+    persistedVideo?.videoAnalysisError ?? null,
+  );
+  const [currentJobId, setCurrentJobId] = useState<string | null>(
+    persistedVideo?.currentJobId ?? null,
+  );
+  const videoFileMeta = selectedVideoFile
+    ? { name: selectedVideoFile.name, size: selectedVideoFile.size }
+    : restoredFileMeta;
   const [selectedAnalysisType, setSelectedAnalysisType] =
     useState("highlights");
   const [selectedFocusAreas, setSelectedFocusAreas] = useState<string[]>([]);
@@ -358,7 +412,29 @@ export default function AFLDashboard() {
       retryCount: number;
       isUIControlled?: boolean;
     }>
-  >([]);
+  >(persistedVideo?.processingQueue ?? []);
+
+  // Save upload/analysis status so it survives navigating to other pages
+  useEffect(() => {
+    saveVideoState({
+      currentJobId,
+      isVideoAnalyzing,
+      videoAnalysisProgress,
+      videoAnalysisComplete,
+      videoAnalysisError,
+      fileMeta: videoFileMeta,
+      processingQueue,
+    });
+  }, [
+    currentJobId,
+    isVideoAnalyzing,
+    videoAnalysisProgress,
+    videoAnalysisComplete,
+    videoAnalysisError,
+    videoFileMeta?.name,
+    videoFileMeta?.size,
+    processingQueue,
+  ]);
 
   // Processing queue management functions
   const StatusIcon = ({ status }: { status: string }) => {
@@ -437,7 +513,9 @@ export default function AFLDashboard() {
 useEffect(() => {
     if (!currentJobId) return;
 
-    const interval = setInterval(async () => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+
+    const checkStatus = async () => {
       try {
         const token = getAccessToken();
         if (!token) {
@@ -456,7 +534,7 @@ useEffect(() => {
         }
 
         setVideoAnalysisProgress((prev) =>
-          data.status === "processing" ? Math.min(prev + 10, 90) : 100,
+          data.status === "processing" ? Math.min(prev + 5, 90) : 100,
         );
         setProcessingQueue((prev) =>
           prev.map((item) =>
@@ -470,7 +548,7 @@ useEffect(() => {
                       : data.status === "failed"
                         ? "failed"
                         : "completed",
-                  progress: data.status === "processing" ? Math.min(item.progress + 10, 90) : 100,
+                  progress: data.status === "processing" ? Math.min(item.progress + 5, 90) : 100,
                   processingStage:
                     data.status === "processing" ? "video_analysis" : "analysis_complete",
                   completedTime:
@@ -485,16 +563,15 @@ useEffect(() => {
         );
 
         if (data.status !== "processing") {
-          clearInterval(interval);
+          if (interval) clearInterval(interval);
           setCurrentJobId(null);
           setIsVideoAnalyzing(false);
           setVideoAnalysisComplete(data.status === "done" || data.status === "partial");
           if (data.error) {
             setVideoAnalysisError(data.error);
           }
-          if (data.results?.crowd) {
-            navigate(`/crowd-monitor?jobId=${encodeURIComponent(data.job_id)}`);
-          }
+          // Stay on this page when analysis finishes so the user can review
+          // the result or upload another video. (Crowd Monitor is in the menu.)
         }
       } catch (error) {
         console.error("Polling error:", error);
@@ -503,9 +580,15 @@ useEffect(() => {
           error instanceof Error ? error.message : "Polling failed",
         );
       }
-    }, 4000);
+    };
 
-    return () => clearInterval(interval);
+    // Check straight away, then every 2 seconds
+    void checkStatus();
+    interval = setInterval(checkStatus, 2000);
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [activeQueueItemId, currentJobId, navigate]);
   // Generate dynamic chart data for analysis results
   const generateAnalysisChartData = (item: any) => {
@@ -922,6 +1005,7 @@ useEffect(() => {
 
   // Logout function
   const handleLogout = () => {
+    clearVideoState();
     localStorage.removeItem("isAuthenticated");
     localStorage.removeItem("userEmail");
     localStorage.removeItem("userName");
@@ -960,8 +1044,34 @@ useEffect(() => {
       }
 
       setSelectedVideoFile(file);
+      setRestoredFileMeta(null);
       setVideoAnalysisError(null);
       setVideoAnalysisComplete(false);
+    }
+  };
+
+  // Clear the finished/failed analysis so the user can upload another video
+  const resetVideoUpload = (openFilePicker = false) => {
+    setSelectedVideoFile(null);
+    setRestoredFileMeta(null);
+    setIsVideoUploading(false);
+    setVideoUploadProgress(0);
+    setIsVideoAnalyzing(false);
+    setVideoAnalysisProgress(0);
+    setVideoAnalysisComplete(false);
+    setVideoAnalysisError(null);
+    setCurrentJobId(null);
+    try {
+      sessionStorage.removeItem(VIDEO_STATE_KEY);
+    } catch {
+      // ignore
+    }
+    const input = document.getElementById(
+      "video-upload-dashboard",
+    ) as HTMLInputElement | null;
+    if (input) {
+      input.value = ""; // lets the user pick the same file again
+      if (openFilePicker) input.click();
     }
   };
 
@@ -1052,6 +1162,18 @@ useEffect(() => {
         throw new Error(data.detail || "Upload failed");
       }
 
+      // Save right away: if the user left this page while the upload was in
+      // flight, the state setters below do nothing but the job is still tracked.
+      saveVideoState({
+        currentJobId: data.job_id,
+        isVideoAnalyzing: true,
+        videoAnalysisProgress: 15,
+        videoAnalysisComplete: false,
+        videoAnalysisError: null,
+        fileMeta: { name: selectedVideoFile.name, size: selectedVideoFile.size },
+        processingQueue: [],
+      });
+
       setCurrentJobId(data.job_id);
       setIsVideoUploading(false);
       setIsVideoAnalyzing(true);
@@ -1074,9 +1196,7 @@ useEffect(() => {
     } catch (error) {
       setIsVideoUploading(false);
       setIsVideoAnalyzing(false);
-      setVideoAnalysisError(
-        error instanceof Error ? error.message : "Upload failed",
-      );
+      setVideoAnalysisError(getFriendlyThrownMessage(error));
 
       // Mark the queue item as failed if there was an error
       setProcessingQueue((prev) =>
@@ -1246,7 +1366,7 @@ useEffect(() => {
       analysisId,
       timestamp: new Date().toISOString(),
       videoFile: {
-        name: selectedVideoFile?.name || "sample_video.mp4",
+        name: videoFileMeta?.name || "sample_video.mp4",
         duration: "02:15:30",
         size: "1.8 GB",
         resolution: "1920x1080",
@@ -1465,7 +1585,7 @@ Report generated by AFL Analytics Platform
   const handleDownloadReport = async (
     format: "pdf" | "json" | "txt" = "txt",
   ) => {
-    if (!videoAnalysisComplete || !selectedVideoFile) {
+    if (!videoAnalysisComplete || !videoFileMeta) {
       alert("Please complete video analysis first");
       return;
     }
@@ -1557,7 +1677,7 @@ Report generated by AFL Analytics Platform
     const clipsData = `AFL ANALYTICS VIDEO CLIPS EXPORT
 
 Generated: ${new Date().toLocaleString()}
-Source Video: ${selectedVideoFile?.name}
+Source Video: ${videoFileMeta?.name}
 Analysis Type: ${
       selectedAnalysisType === "highlights"
         ? "Match Highlights"
@@ -1706,16 +1826,18 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
   <span>Settings</span>
 </Button>
 
+<ConfirmLogout onConfirm={handleLogout}>
 <Button
   type="button"
   variant="outline"
   size="sm"
-  onClick={handleLogout}
+  
   className="hidden items-center gap-2 lg:inline-flex"
 >
   <LogOut className="h-4 w-4" />
   <span>Logout</span>
 </Button>
+</ConfirmLogout>
             </div>
           </div>
         </div>
@@ -2888,8 +3010,8 @@ Generated on: ${new Date().toLocaleString()}
                     >
                       <Video className="w-12 h-12 mx-auto text-gray-400 mb-4" />
                       <div className="text-lg font-medium text-gray-700">
-                        {selectedVideoFile
-                          ? selectedVideoFile.name
+                        {videoFileMeta
+                          ? videoFileMeta.name
                           : "Drop video files here"}
                       </div>
                       <div className="text-sm text-gray-500">
@@ -2901,17 +3023,17 @@ Generated on: ${new Date().toLocaleString()}
                     </label>
                   </div>
 
-                  {selectedVideoFile && (
+                  {videoFileMeta && (
                     <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
                       <div className="flex items-center gap-2">
                         <Video className="w-4 h-4 text-blue-600" />
                         <span className="font-medium">
-                          {selectedVideoFile.name}
+                          {videoFileMeta.name}
                         </span>
                       </div>
                       <div className="text-sm text-gray-600 mt-1">
                         Size:{" "}
-                        {(selectedVideoFile.size / 1024 / 1024).toFixed(1)} MB
+                        {(videoFileMeta.size / 1024 / 1024).toFixed(1)} MB
                       </div>
                     </div>
                   )}
@@ -2921,6 +3043,15 @@ Generated on: ${new Date().toLocaleString()}
                       <div className="text-sm text-red-700">
                         {videoAnalysisError}
                       </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 w-full border-red-300 text-red-700 hover:bg-red-100"
+                        onClick={() => resetVideoUpload(true)}
+                      >
+                        <Upload className="w-4 h-4 mr-2" />
+                        Choose a different video
+                      </Button>
                     </div>
                   )}
 
@@ -2952,6 +3083,15 @@ Generated on: ${new Date().toLocaleString()}
                           Analysis completed successfully!
                         </span>
                       </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 w-full border-green-300 text-green-700 hover:bg-green-100"
+                        onClick={() => resetVideoUpload(true)}
+                      >
+                        <Upload className="w-4 h-4 mr-2" />
+                        Upload another video
+                      </Button>
                     </div>
                   )}
 
@@ -3072,7 +3212,7 @@ Generated on: ${new Date().toLocaleString()}
                           <Badge variant="secondary">Complete</Badge>
                         </div>
                         <div className="text-sm text-gray-600">
-                          Video: {selectedVideoFile?.name}
+                          Video: {videoFileMeta?.name}
                         </div>
                       </div>
 

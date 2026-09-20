@@ -1,3 +1,4 @@
+import { getAccessToken } from "@/lib/auth";
 import { useState, useEffect } from "react";
 import { useMsal } from "@azure/msal-react";
 import { Button } from "@/components/ui/button";
@@ -64,7 +65,7 @@ import { microsoftLoginRequest } from "@/lib/microsoftAuth";
 ========================================================= */
 
 export const getAuthHeaders = () => {
-  const token = localStorage.getItem("access_token");
+  const token = getAccessToken();
 
   return token
     ? {

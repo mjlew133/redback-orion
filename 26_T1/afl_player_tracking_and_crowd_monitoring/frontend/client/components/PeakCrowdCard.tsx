@@ -1,17 +1,24 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, Clock, ImageOff } from "lucide-react";
+import { Users, Clock } from "lucide-react";
 import { BACKEND_URL } from "@/lib/config";
+import { getAccessToken, isDemoToken } from "@/lib/auth";
 
 interface PeakCrowdData {
   peakCount: number | null;
   timestamp: number | null;
   frameId: number | null;
-  imageUrl: string | null;
   crowdState: string | null;
   riskZone: string | null;
   jobId: string | null;
+}
+
+interface PastJob {
+  job_id: string;
+  status: string;
+  created_at: string;
 }
 
 type Status =
@@ -21,11 +28,6 @@ type Status =
   | "error"
   | "signed-out"
   | "demo";
-
-const getAccessToken = () =>
-  localStorage.getItem("accessToken") ||
-  localStorage.getItem("access_token") ||
-  localStorage.getItem("authToken");
 
 const formatTimestamp = (seconds: number | null) => {
   if (seconds === null || Number.isNaN(seconds)) return "N/A";
@@ -37,15 +39,55 @@ const formatTimestamp = (seconds: number | null) => {
 const formatLabel = (value: string | null) =>
   value ? value.replace(/_/g, " ") : null;
 
+const formatJobDate = (value: string) =>
+  new Date(value).toLocaleString("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
 /**
- * Stat card showing the busiest moment (peak crowd) from the latest
- * crowd-monitoring analysis. Data comes from GET /api/crowd/latest.
+ * Stat card showing the busiest moment (peak crowd) from a crowd-monitoring
+ * analysis. Shows the latest analysis by default, or the one chosen with the
+ * picker / the ?jobId= URL parameter.
  */
 export default function PeakCrowdCard() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const jobId = searchParams.get("jobId");
+
   const [status, setStatus] = useState<Status>("loading");
   const [data, setData] = useState<PeakCrowdData | null>(null);
-  const [imageFailed, setImageFailed] = useState(false);
+  const [pastJobs, setPastJobs] = useState<PastJob[]>([]);
 
+  // Past completed analyses for the picker
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token || isDemoToken(token)) return;
+
+    const controller = new AbortController();
+
+    fetch(`${BACKEND_URL}/jobs?limit=20`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        const jobs: PastJob[] = (json?.jobs ?? []).filter(
+          (job: PastJob) => job.status === "done" || job.status === "partial",
+        );
+        setPastJobs(jobs);
+      })
+      .catch(() => {
+        // The picker is optional - the card still works without it
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  // Peak crowd for the chosen (or latest) analysis
   useEffect(() => {
     const token = getAccessToken();
     if (!token) {
@@ -53,14 +95,19 @@ export default function PeakCrowdCard() {
       return;
     }
     // The built-in demo login uses a placeholder token the backend rejects.
-    if (token.startsWith("demo_")) {
+    if (isDemoToken(token)) {
       setStatus("demo");
       return;
     }
 
-    const controller = new AbortController();
+    setStatus("loading");
 
-    fetch(`${BACKEND_URL}/api/crowd/latest`, {
+    const controller = new AbortController();
+    const url = jobId
+      ? `${BACKEND_URL}/jobs/${encodeURIComponent(jobId)}`
+      : `${BACKEND_URL}/api/crowd/latest`;
+
+    fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
@@ -78,9 +125,12 @@ export default function PeakCrowdCard() {
       })
       .then((json) => {
         if (!json) return;
-        const summary = json.summary ?? {};
-        const peak = summary.peak_crowd_frame ?? {};
-        const rawPeak = json.crowd?.peak_crowd_frame ?? {};
+
+        // /jobs/{id} nests the crowd result under results; /api/crowd/latest
+        // returns it under crowd.
+        const crowd = jobId ? json.results?.crowd : json.crowd;
+        const summary = crowd?.summary ?? {};
+        const peak = crowd?.peak_crowd_frame ?? {};
         const count = peak.person_count ?? summary.peak_person_count ?? null;
 
         if (count === null || count === undefined) {
@@ -92,10 +142,6 @@ export default function PeakCrowdCard() {
           peakCount: count,
           timestamp: peak.timestamp ?? null,
           frameId: peak.frame_id ?? null,
-          imageUrl:
-            rawPeak.annotated_frame_path ??
-            rawPeak.people_annotated_frame_path ??
-            null,
           crowdState: summary.crowd_state ?? null,
           riskZone: summary.highest_risk_zone ?? null,
           jobId: json.job_id ?? null,
@@ -107,14 +153,38 @@ export default function PeakCrowdCard() {
       });
 
     return () => controller.abort();
-  }, []);
+  }, [jobId]);
+
+  const handlePick = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set("jobId", value);
+    else next.delete("jobId");
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <Card data-testid="peak-crowd-card">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <p className="text-sm text-gray-600">Peak Crowd</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-gray-600">Peak Crowd</p>
+              {pastJobs.length > 0 && (
+                <select
+                  aria-label="Choose a video analysis"
+                  className="max-w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700"
+                  value={jobId ?? ""}
+                  onChange={(e) => handlePick(e.target.value)}
+                >
+                  <option value="">Latest analysis</option>
+                  {pastJobs.map((job) => (
+                    <option key={job.job_id} value={job.job_id}>
+                      {formatJobDate(job.created_at)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
 
             {status === "loading" && (
               <p className="text-2xl font-bold text-gray-400">Loading...</p>
@@ -152,7 +222,9 @@ export default function PeakCrowdCard() {
               <>
                 <p className="text-2xl font-bold text-gray-400">--</p>
                 <p className="text-xs text-gray-500">
-                  No crowd analysis yet. Upload a video to see the peak.
+                  {jobId
+                    ? "No crowd results found for this video."
+                    : "No crowd analysis yet. Upload a video to see the peak."}
                 </p>
               </>
             )}
@@ -161,7 +233,8 @@ export default function PeakCrowdCard() {
               <>
                 <p className="text-2xl font-bold text-gray-400">--</p>
                 <p className="text-xs text-gray-500">
-                  Session expired or signed out. Sign in again to see peak crowd data.
+                  Session expired or signed out. Sign in again to see peak crowd
+                  data.
                 </p>
               </>
             )}
@@ -180,26 +253,14 @@ export default function PeakCrowdCard() {
               <>
                 <p className="text-2xl font-bold text-gray-400">--</p>
                 <p className="text-xs text-red-600">
-                  Could not load peak crowd data.
+                  Could not load peak crowd data. Check that the server is
+                  running and try again.
                 </p>
               </>
             )}
           </div>
 
-          {status === "ready" && data?.imageUrl && !imageFailed ? (
-            <img
-              src={data.imageUrl}
-              alt="Frame with the highest crowd count"
-              className="h-20 w-32 rounded-md border object-cover"
-              onError={() => setImageFailed(true)}
-            />
-          ) : status === "ready" ? (
-            <div className="flex h-20 w-32 items-center justify-center rounded-md border bg-gray-50">
-              <ImageOff className="h-6 w-6 text-gray-400" />
-            </div>
-          ) : (
-            <Users className="h-8 w-8 text-blue-500" />
-          )}
+          <Users className="h-8 w-8 text-blue-500" />
         </div>
       </CardContent>
     </Card>
