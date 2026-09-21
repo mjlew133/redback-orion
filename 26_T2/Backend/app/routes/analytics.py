@@ -21,6 +21,8 @@ from app.services.result_formatter import (
     player_with_urls,
 )
 
+from app.schemas.jobs import CrowdResponse
+
 router = APIRouter(
     prefix="/api",
     tags=["Analytics"],
@@ -48,6 +50,31 @@ def _latest_job(
         .order_by(Job.created_at.desc())
         .first()
     )
+    
+    
+def _get_job(
+    job_id: str,
+    db: Session,
+    current_user: dict,
+):
+    query = db.query(Job).filter(
+        Job.job_id == job_id
+    )
+
+    if current_user["role"] != "admin":
+        query = query.filter(
+            Job.user_id == current_user["sub"]
+        )
+
+    job = query.first()
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found",
+        )
+
+    return job
 
 
 def _player_summary(
@@ -176,17 +203,20 @@ def latest_analysis(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    print("1st INN")
     job = _latest_job(
         db,
         current_user,
     )
+    print("INN")
 
     if not job:
+        print("Not innnnn")
         raise HTTPException(
             status_code=404,
             detail=("No completed analysis " "is available"),
         )
-
+    print("retrurrn")
     return {
         "job_id": str(job.job_id),
         "status": job.status,
@@ -225,29 +255,39 @@ def latest_analytics(
     }
 
 
-@router.get("/crowd/latest")
-def latest_crowd(
+@router.get(
+    "/crowd/{job_id}",
+    response_model=CrowdResponse,
+)
+def get_crowd(
+    job_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    job = _latest_job(
+    job = _get_job(
+        job_id,
         db,
         current_user,
     )
 
-    if not job or not job.crowd_result:
+    if job.status not in ["done", "partial"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis is not complete",
+        )
+
+    if not job.crowd_result:
         raise HTTPException(
             status_code=404,
-            detail=("No completed crowd " "analysis is available"),
+            detail="Crowd analysis is not available for this job",
         )
 
     return {
         "job_id": str(job.job_id),
         "status": job.status,
-        "created_at": (job.created_at),
-        "updated_at": (job.updated_at),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
         "crowd": crowd_with_urls(job.crowd_result),
-        "summary": _crowd_summary(job.crowd_result),
     }
 
 
