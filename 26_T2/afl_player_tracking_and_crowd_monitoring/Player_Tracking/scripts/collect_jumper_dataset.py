@@ -3,9 +3,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# -------------------------------------------------------------------
 # Configuration
-# -------------------------------------------------------------------
 VIDEO_PATH = "test_match.mp4"
 OUTPUT_DIR = "jumper_dataset"
 CONF_THRESHOLD = 0.5        # Minimum detection confidence
