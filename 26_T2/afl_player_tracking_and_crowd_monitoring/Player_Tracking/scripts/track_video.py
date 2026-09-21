@@ -9,6 +9,8 @@ Usage:
     python scripts/track_video.py data/videos/video_1.mp4 --max-frames 300   # quick test
     python scripts/track_video.py data/videos/video_1.mp4 --start-frame 50000 \
         --track-id-offset 1200 --output-suffix _part2
+    python scripts/track_video.py data/videos/broadcast.mp4 \
+        --model runs/detect/broadcast/weights/best.pt --grass-filter
 
 CSV columns: frame, track_id, class, confidence, x1, y1, x2, y2 (pixels).
 """
@@ -20,9 +22,35 @@ from pathlib import Path
 
 import cv2
 import imageio_ffmpeg
+import torch
 from ultralytics import YOLO
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def grass_keep_mask(frame, boxes_xyxy, min_frac: float = 0.3):
+    """Keep detections standing on green grass.
+
+    Optional visual heuristic: require green pixels below the box. This does
+    not repair a failed detector and may also remove valid players when their
+    feet are occluded or over a field marking. Evaluate recall before using it.
+    """
+    H, W = frame.shape[:2]
+    keep = []
+    for x1, y1, x2, y2 in boxes_xyxy:
+        bh = max(1.0, float(y2 - y1))
+        ys = int(y2) + 1
+        ye = min(H, int(y2 + max(4.0, 0.05 * bh)))
+        xs = max(0, int(x1))
+        xe = min(W, int(x2) + 1)
+        if ye <= ys or xe <= xs:
+            keep.append(True)  # box at frame edge — don't filter
+            continue
+        strip = frame[ys:ye, xs:xe].astype(int)
+        b, g, r = strip[..., 0], strip[..., 1], strip[..., 2]
+        green = (g > r + 15) & (g > b + 10)
+        keep.append(bool(green.mean() >= min_frac))
+    return keep
 
 
 def main() -> None:
@@ -40,6 +68,10 @@ def main() -> None:
                    help="add this value to IDs in resumed video/CSV output")
     p.add_argument("--output-suffix", default="",
                    help="append text such as _part2 to output filenames")
+    p.add_argument("--grass-filter", action="store_true",
+                   help="optional green-pixel heuristic below boxes; may also remove valid detections")
+    p.add_argument("--grass-min", type=float, default=0.3,
+                   help="min green fraction below a box to keep it (default 0.3)")
     args = p.parse_args()
 
     if not args.video.exists():
@@ -96,6 +128,17 @@ def main() -> None:
                 break
             result = model.track(frame, persist=True, conf=args.conf,
                                  tracker=args.tracker, verbose=False)[0]
+            if (args.grass_filter and result.boxes is not None
+                    and len(result.boxes) > 0):
+                keep = grass_keep_mask(frame, result.boxes.xyxy.cpu().numpy(),
+                                       args.grass_min)
+                idx = [i for i, k in enumerate(keep) if k]
+                if idx:
+                    device = result.boxes.data.device
+                    result.boxes = result.boxes[
+                        torch.tensor(idx, dtype=torch.long, device=device)]
+                else:
+                    result.boxes = None
             if result.boxes is not None and result.boxes.id is not None:
                 if args.track_id_offset:
                     # Keep the annotated video IDs consistent with the CSV IDs.

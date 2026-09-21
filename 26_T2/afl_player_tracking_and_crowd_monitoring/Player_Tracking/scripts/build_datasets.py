@@ -23,15 +23,19 @@ Usage:
 
 import random
 import shutil
+import argparse
+import json
 from pathlib import Path
 
 import yaml
+from dataset_integrity import read_pairs
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 OUT = ROOT / "datasets"
 SEED = 42
 VAL_FRACTION = 0.2
+EXPECTED_RAW_COUNTS = {"gcs_vs_car": 200, "ss_vs_wb": 194, "cat_vs_haw": 176}
 
 # Original class indices per raw dataset, from each dataset's classes.txt.
 RAW_CLASSES = {
@@ -71,14 +75,10 @@ PLAYER_REF_MAP = {
 
 def load_pairs(ds: str) -> list[tuple[Path, list[str]]]:
     """Return [(image_path, label_lines)] for one raw dataset."""
-    pairs = []
-    for lbl in sorted((RAW / ds / "labels").glob("*.txt")):
-        matches = [p for p in (RAW / ds / "images").glob(lbl.stem + ".*")
-                   if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
-        if not matches:
-            print(f"  WARNING: no image for {lbl}, skipped")
-            continue
-        pairs.append((matches[0], lbl.read_text().splitlines()))
+    pairs = read_pairs(RAW / ds, len(RAW_CLASSES[ds]))
+    if len(pairs) < EXPECTED_RAW_COUNTS[ds]:
+        raise ValueError(f"Incomplete original dataset {ds}: {len(pairs)} pairs; "
+                         f"expected at least {EXPECTED_RAW_COUNTS[ds]}. Restore the backup first.")
     return pairs
 
 
@@ -123,6 +123,21 @@ def write_split(name: str, class_names: list[str],
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--broadcast-reviewed", nargs="+", type=Path,
+                        help="reviewed/ folders to add to the original raw player/ref data")
+    parser.add_argument("--name", default="player_ref_broadcast_clean")
+    parser.add_argument("--val-gap-frames", type=int, default=300,
+                        help="exclude training frames this close to the broadcast validation tail")
+    args = parser.parse_args()
+    # Check every source before write_split can replace any existing dataset.
+    try:
+        raw_pairs = {ds: load_pairs(ds) for ds in RAW_CLASSES}
+        if args.broadcast_reviewed:
+            build_broadcast(raw_pairs, args.broadcast_reviewed, args.name, args.val_gap_frames)
+            return
+    except (ValueError, OSError) as exc:
+        raise SystemExit(f"Dataset build FAILED: {exc}") from exc
     variants = {
         "all_teams": (ALL_TEAMS_CLASSES, ALL_TEAMS_MAP),
         "all_classes": (ALL_CLASSES_CLASSES, ALL_CLASSES_MAP),
@@ -131,10 +146,79 @@ def main() -> None:
     for name, (class_names, mapping) in variants.items():
         pairs = []
         for ds in RAW_CLASSES:
-            for img, lines in load_pairs(ds):
+            for img, lines in raw_pairs[ds]:
                 pairs.append((img, remap(lines, mapping[ds]),
                               f"{ds}__{img.stem}"))
         write_split(name, class_names, pairs)
+
+
+def build_broadcast(raw_pairs, reviewed_dirs, name, gap):
+    """Build a fresh, traceable dataset; never read unreviewed detector proposals."""
+    if Path(name).name != name or name in (".", "..") or gap < 0:
+        raise ValueError("Use a simple output name and a nonnegative frame gap")
+    destination = OUT / name
+    if destination.exists():
+        raise ValueError(f"{destination} already exists; choose a fresh --name")
+    old = [(img, remap(lines, PLAYER_REF_MAP[ds]), f"{ds}__{img.stem}")
+           for ds in RAW_CLASSES for img, lines in raw_pairs[ds]]
+    random.Random(SEED).shuffle(old)
+    n_val = int(VAL_FRACTION * len(old))
+    splits = {"train": old[n_val:], "val": old[:n_val]}
+    excluded = []
+    seen = set()
+    for folder in reviewed_dirs:
+        folder = folder.resolve()
+        if folder.name != "reviewed" or folder in seen:
+            raise ValueError(f"Expected a unique reviewed/ directory: {folder}")
+        seen.add(folder)
+        approved = {int(s) for s in (folder.parent / "reviewed.txt").read_text().splitlines() if s.strip()}
+        pairs = read_pairs(folder, 2)
+        video = folder.parent.name
+        frame_pairs = []
+        for img, lines in pairs:
+            prefix = f"{video}_frame_"
+            if not img.stem.startswith(prefix):
+                raise ValueError(f"Unexpected reviewed image name: {img}")
+            frame = int(img.stem[len(prefix):])
+            if frame not in approved:
+                raise ValueError(f"Unreviewed/stale frame in reviewed export: {img}")
+            frame_pairs.append((frame, img, lines))
+        if {f for f, _, _ in frame_pairs} != approved:
+            raise ValueError(f"{folder}: reviewed manifest and exported files differ; run --split again")
+        frame_pairs.sort()
+        if len(frame_pairs) < 10:
+            raise ValueError(f"{folder}: review at least 10 frames before making a holdout")
+        count = max(1, int(VAL_FRACTION * len(frame_pairs)))
+        boundary = frame_pairs[-count][0]
+        train_count = 0
+        for frame, img, lines in frame_pairs:
+            if boundary - gap <= frame < boundary:
+                excluded.append(str(img))
+                continue
+            split = "val" if frame >= boundary else "train"
+            splits[split].append((img, lines, img.stem))
+            train_count += split == "train"
+        if not train_count:
+            raise ValueError(f"{folder}: no training frames remain outside the validation gap")
+    # All source validation has succeeded; now write an independent dataset.
+    provenance = {"seed": SEED, "val_gap_frames": gap, "excluded_for_gap": excluded, "splits": {}}
+    for split, pairs in splits.items():
+        stems = [stem for _, _, stem in pairs]
+        if len(stems) != len(set(stems)):
+            raise ValueError(f"Duplicate output names in {split}")
+        (destination / split / "images").mkdir(parents=True)
+        (destination / split / "labels").mkdir()
+        provenance["splits"][split] = []
+        for img, lines, stem in pairs:
+            shutil.copy2(img, destination / split / "images" / f"{stem}{img.suffix}")
+            (destination / split / "labels" / f"{stem}.txt").write_text("\n".join(lines) + ("\n" if lines else ""))
+            provenance["splits"][split].append({"source_image": str(img.resolve()), "stem": stem})
+    data = {"path": str(destination.resolve()), "train": "train/images", "val": "val/images",
+            "names": dict(enumerate(PLAYER_REF_CLASSES))}
+    (destination / "data.yaml").write_text(yaml.safe_dump(data))
+    (destination / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    print(f"{destination}: {len(splits['train'])} train / {len(splits['val'])} val; "
+          f"{len(excluded)} frames excluded for temporal separation")
 
 
 if __name__ == "__main__":
