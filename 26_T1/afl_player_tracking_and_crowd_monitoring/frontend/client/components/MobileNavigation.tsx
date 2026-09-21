@@ -1,4 +1,6 @@
+import ConfirmLogout from "@/components/ConfirmLogout";
 import { useState } from "react";
+import { clearVideoState } from "@/lib/videoState";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -120,6 +122,7 @@ export default function MobileNavigation() {
 };
 
   const handleLogout = () => {
+    clearVideoState();
     /*
      * Remove authentication information.
      *
@@ -275,9 +278,10 @@ export default function MobileNavigation() {
                   {/* LOGOUT */}
                   {/* ================================================= */}
 
-                  <button
+                  <ConfirmLogout onConfirm={handleLogout}>
+<button
                     type="button"
-                    onClick={handleLogout}
+                    
                     className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
                   >
                     <LogOut className="h-5 w-5 shrink-0" />
@@ -292,6 +296,7 @@ export default function MobileNavigation() {
                       </div>
                     </div>
                   </button>
+</ConfirmLogout>
                 </div>
               </nav>
             </SheetContent>

@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import MobileNavigation from "@/components/MobileNavigation";
 import LiveClock from "@/components/LiveClock";
+import PeakCrowdCard from "@/components/PeakCrowdCard";
 import {
   Users,
   TrendingUp,
@@ -292,6 +293,9 @@ export default function CrowdMonitor() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Peak Crowd (from latest analysed video) */}
+          <PeakCrowdCard />
 
           {/* Controls */}
           <div className="flex flex-col sm:flex-row gap-4">

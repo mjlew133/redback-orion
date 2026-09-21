@@ -1,4 +1,6 @@
+import ConfirmLogout from "@/components/ConfirmLogout";
 import { useEffect, useState } from "react";
+import { clearVideoState } from "@/lib/videoState";
 import { useNavigate } from "react-router-dom";
 
 import MobileNavigation from "@/components/MobileNavigation";
@@ -258,6 +260,7 @@ export default function Profile() {
   // =====================================================
 
   const handleLogout = () => {
+    clearVideoState();
     localStorage.removeItem("isAuthenticated");
     localStorage.removeItem("userEmail");
     localStorage.removeItem("userName");
@@ -344,14 +347,16 @@ export default function Profile() {
                   Settings
                 </Button>
 
-                <Button
+                <ConfirmLogout onConfirm={handleLogout}>
+<Button
                   variant="outline"
-                  onClick={handleLogout}
+                  
                   className="gap-2"
                 >
                   <LogOut className="w-4 h-4" />
                   Logout
                 </Button>
+</ConfirmLogout>
               </div>
             </div>
           </div>
