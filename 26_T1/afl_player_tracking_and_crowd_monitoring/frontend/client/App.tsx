@@ -16,7 +16,6 @@ const PlayerPerformance = lazy(() => import("./pages/PlayerPerformance"));
 const CrowdMonitor = lazy(() => import("./pages/CrowdMonitor"));
 const Analytics = lazy(() => import("./pages/Analytics"));
 const Reports = lazy(() => import("./pages/Reports"));
-const ApiDiagnostics = lazy(() => import("./pages/ApiDiagnostics"));
 const ErrorDemo = lazy(() => import("./pages/ErrorDemo"));
 const About = lazy(() => import("./pages/About"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -90,7 +89,6 @@ export default function App() {
                 <Route path="/crowd-monitor" element={<CrowdMonitor />} />
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/reports" element={<Reports />} />
-                <Route path="/api-diagnostics" element={<ApiDiagnostics />} />
                 <Route path="/about" element={<About />} />
                 <Route path="/error-demo" element={<ErrorDemo />} />
                 <Route path="/add-player" element={<AddPlayer />} />

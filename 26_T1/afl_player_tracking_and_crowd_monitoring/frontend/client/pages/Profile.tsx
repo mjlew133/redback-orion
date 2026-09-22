@@ -294,73 +294,7 @@ export default function Profile() {
 
       <div className="lg:ml-64 pb-20 lg:pb-0">
 
-        {/* =================================================
-            DESKTOP TOP HEADER
-        ================================================= */}
 
-        <header className="hidden lg:block border-b bg-white/95 backdrop-blur-sm sticky top-0 z-30">
-          <div className="px-5 py-4">
-            <div className="flex items-center justify-between">
-
-              {/* Logo / Home */}
-              <button
-                type="button"
-                onClick={() =>
-                  navigate("/afl-dashboard")
-                }
-                className="flex items-center gap-4 text-left"
-              >
-                <div className="w-12 h-12 bg-gradient-to-br from-green-600 to-blue-600 rounded-xl flex items-center justify-center">
-                  <Activity className="w-7 h-7 text-white" />
-                </div>
-
-                <div>
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                    AFL Analytics
-                  </h1>
-
-                  <p className="text-sm text-gray-600">
-                    Real-time match insights & player analytics
-                  </p>
-                </div>
-              </button>
-
-              {/* Header Right */}
-              <div className="flex items-center gap-5">
-
-                <div className="flex items-center gap-2 rounded-full bg-red-500 px-4 py-2 text-sm font-semibold text-white">
-                  <span className="h-2 w-2 rounded-full bg-red-200" />
-                  LIVE
-                </div>
-
-                {email && (
-                  <span className="text-sm text-gray-600">
-                    Welcome, {email}
-                  </span>
-                )}
-
-                <Button
-                  variant="outline"
-                  className="gap-2"
-                >
-                  <Settings className="w-4 h-4" />
-                  Settings
-                </Button>
-
-                <ConfirmLogout onConfirm={handleLogout}>
-<Button
-                  variant="outline"
-                  
-                  className="gap-2"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Logout
-                </Button>
-</ConfirmLogout>
-              </div>
-            </div>
-          </div>
-        </header>
 
         {/* =================================================
             PROFILE CONTENT

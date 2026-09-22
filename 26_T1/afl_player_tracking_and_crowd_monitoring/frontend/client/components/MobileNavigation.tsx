@@ -17,7 +17,6 @@ import {
   Menu,
   Home,
   Zap,
-  Terminal,
   Settings,
   LogOut,
   User,
@@ -54,13 +53,7 @@ const navigationItems = [
     icon: Download,
     description: "Download & manage reports",
   },
-  {
-    name: "API Diagnostics",
-    href: "/api-diagnostics",
-    icon: Terminal,
-    description: "System monitoring",
-  },
-
+ 
   // NEW PROFILE NAVIGATION
   {
     name: "Profile",
@@ -92,7 +85,6 @@ const bottomNavigationItems = navigationItems.filter((item) =>
     "Crowd Monitor",
     "Analytics",
     "Reports",
-    "API Diagnostics",
     "About",
   ].includes(item.name),
 );
