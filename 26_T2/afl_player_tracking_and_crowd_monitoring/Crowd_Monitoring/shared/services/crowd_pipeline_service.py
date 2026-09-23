@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 
 from .crowd_analytics_service import process_analytics
 from .crowd_detection_service import process_detection
+from .safety_detection_service import process_safety_detection
+from data_aggregation.main import aggregate_stadium_data
 from crowd_allocation_risk_zone.main import assess_risk
 from crowd_behaviour_analytics.main import analyze_behaviour
 from shared.timing import timed as _timed
