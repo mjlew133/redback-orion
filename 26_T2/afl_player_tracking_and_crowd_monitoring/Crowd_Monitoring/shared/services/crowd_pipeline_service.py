@@ -262,6 +262,15 @@ stampede_result = safety_result["stampede"]
             "density_extremes": _build_density_extremes(analytics_result, risk_result),
         }
 
-    _print_benchmark_report(detection_result, timings)
-    payload["stage_timings_ms"] = timings
-    return payload
+    with _timed("aggregation", timings, verbose=False):
+    aggregated_result = aggregate_stadium_data(
+        crowd_data=payload,
+        fire_data=fire_result,
+        stampede_data=stampede_result,
+        stadium_id=data.get("stadium_id", "STADIUM_01"),
+    )
+
+_print_benchmark_report(detection_result, timings)
+aggregated_result["stage_timings_ms"] = timings
+
+return aggregated_result
