@@ -13,6 +13,7 @@ from .models import (
     AnalyticsRequest,
     AnalyticsResponse,
     CrowdPipelineResponse,
+    StadiumMonitoringResponse,
     DetectionRequest,
     DetectionResponse,
     IntelligenceRequest,
