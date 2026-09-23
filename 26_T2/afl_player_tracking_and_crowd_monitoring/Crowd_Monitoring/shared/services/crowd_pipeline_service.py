@@ -230,6 +230,15 @@ def process_crowd_detection(data: dict):
         detection_result = process_detection(data)
     with _timed("analytics", timings, verbose=False):
         analytics_result = process_analytics(detection_result)
+    with _timed("safety_detection", timings, verbose=False):
+    safety_result = process_safety_detection(
+        video_data=data,
+        camera_id=data.get("camera_id", "CAM_02"),
+        zone_id=data.get("zone_id", "ZONE_B"),
+    )
+
+fire_result = safety_result["fire"]
+stampede_result = safety_result["stampede"]
 
     intelligence_input = {
         "video_id": data.get("video_id"),
