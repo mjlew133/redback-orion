@@ -283,3 +283,43 @@ class CrowdPipelineResponse(BaseModel):
     time_series_chart: dict | ChartAsset = Field(default_factory=dict)
     density_extremes: DensityExtremes
     stage_timings_ms: dict = Field(default_factory=dict, description="Wall time per pipeline stage, milliseconds")
+
+class AggregatedZoneResponse(BaseModel):
+    fire: bool = False
+    smoke: bool = False
+    fire_confidence: Optional[float] = None
+    fire_severity: str = "NONE"
+
+    stampede: bool = False
+    stampede_confidence: Optional[float] = None
+    stampede_severity: str = "NONE"
+
+    crowd_count: Optional[int] = None
+    movement_direction: Optional[str] = None
+    movement_speed: Optional[float] = None
+    abnormal_movement: bool = False
+
+    status: str = "NORMAL"
+
+
+class AggregatedCrowdResponse(BaseModel):
+    summary: SummaryMetrics
+    peak_crowd_frame: dict | PeakCrowdFrame = Field(default_factory=dict)
+    anomaly_visual: dict | AnomalyVisual = Field(default_factory=dict)
+    heatmap: HeatmapResult
+    time_series_chart: dict | ChartAsset = Field(default_factory=dict)
+    density_extremes: DensityExtremes
+
+
+class StadiumMonitoringResponse(BaseModel):
+    stadium_id: str
+    video_id: str
+    timestamp: str
+
+    crowd: AggregatedCrowdResponse
+    zones: dict[str, AggregatedZoneResponse] = Field(default_factory=dict)
+
+    stage_timings_ms: dict = Field(
+        default_factory=dict,
+        description="Wall time per pipeline stage, milliseconds",
+    )
