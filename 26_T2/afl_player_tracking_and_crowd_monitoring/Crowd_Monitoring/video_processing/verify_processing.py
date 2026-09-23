@@ -2,7 +2,7 @@ import cv2
 import os
 import time
 import numpy as np
-from main import process_video, executor
+from video_processing.main import process_video, executor
 
 def run_verification(video_id, video_path):
     print("=== STARTING VERIFICATION SYSTEM ===")
@@ -66,4 +66,4 @@ def run_verification(video_id, video_path):
 
 if __name__ == "__main__":
     # Ensure paths match your project structure
-    run_verification("match_01", "data/raw/match_01.mp4")
+    run_verification("dense_closeup", "video_processing/data/test_videos/dense&closeup.mp4")
