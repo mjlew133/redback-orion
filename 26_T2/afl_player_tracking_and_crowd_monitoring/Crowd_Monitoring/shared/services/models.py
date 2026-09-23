@@ -282,3 +282,4 @@ class CrowdPipelineResponse(BaseModel):
     heatmap: HeatmapResult
     time_series_chart: dict | ChartAsset = Field(default_factory=dict)
     density_extremes: DensityExtremes
+    stage_timings_ms: dict = Field(default_factory=dict, description="Wall time per pipeline stage, milliseconds")

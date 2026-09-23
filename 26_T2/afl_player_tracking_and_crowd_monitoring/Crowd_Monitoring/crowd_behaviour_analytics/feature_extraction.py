@@ -1,5 +1,12 @@
 """Feature extraction helpers for crowd behaviour analytics."""
 
+import os
+
+# Trend classifier tuning (env-overridable).
+_TREND_WARMUP = int(os.environ.get("CROWD_TREND_WARMUP", "3"))          # drop the first N detected frames (detector under-counts cold)
+_TREND_THRESHOLD = float(os.environ.get("CROWD_TREND_THRESHOLD", "0.15"))  # relative change to call it increasing/dispersing
+_TREND_MIN_SAMPLES = int(os.environ.get("CROWD_TREND_MIN_SAMPLES", "6"))   # fewer real detections than this -> "stable"
+
 
 def extract_density_features(zones, heatmap):
     """Build behaviour features from zone density and heatmap availability."""
@@ -30,8 +37,42 @@ def extract_density_features(zones, heatmap):
     }
 
 
+def classify_density_trend(
+    frames,
+    warmup_frames=_TREND_WARMUP,
+    change_threshold=_TREND_THRESHOLD,
+    min_samples=_TREND_MIN_SAMPLES,
+):
+    """Classify crowd state from the trajectory of per-frame person counts.
+
+    Uses only frames where the detector actually ran (detected != False) so
+    carried-forward counts don't flatten the signal, drops the first
+    `warmup_frames` of those (the detector under-counts before it warms up),
+    then compares the mean of the first third against the last third.
+
+    Returns (state, delta) where state is one of "increasing_density",
+    "dispersing", "stable" and delta is the relative change (last vs first).
+    """
+    counts = [f.get("person_count", 0) for f in frames if f.get("detected", True)]
+    counts = counts[warmup_frames:]
+    if len(counts) < max(min_samples, 2):
+        return "stable", 0.0
+
+    third = max(len(counts) // 3, 1)
+    first_mean = sum(counts[:third]) / third
+    last_mean = sum(counts[-third:]) / third
+    delta = (last_mean - first_mean) / max(first_mean, 1.0)
+
+    if delta >= change_threshold:
+        return "increasing_density", round(delta, 4)
+    if delta <= -change_threshold:
+        return "dispersing", round(delta, 4)
+    return "stable", round(delta, 4)
+
+
 def classify_crowd_state(features):
-    """ML-style scoring scaffold for overall crowd-state classification."""
+    """Static score of *current* density level (not a trend). Kept as a
+    secondary signal - classify_density_trend is what drives crowd_state now."""
     score = 0.0
 
     score += features["avg_density"] * 0.35

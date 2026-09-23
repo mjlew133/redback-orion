@@ -1,5 +1,7 @@
 """API routes for the shared service layer."""
 
+import traceback
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -53,10 +55,17 @@ def process_crowd_detection_route(data: DetectionRequest):
     try:
         return process_crowd_detection(data.model_dump())
     except Exception as exc:
+        tb = traceback.format_exc()
+        print(tb)   # full traceback to the server console
+        # str(exc) is empty for a lot of exception types; fall back to the
+        # class name and the last traceback line so the UI is never blank.
+        message = str(exc).strip() or f"{type(exc).__name__}: {exc!r}"
         return JSONResponse(
             status_code=500,
             content={
-                "detail": str(exc),
+                "detail": message,
+                "error_type": type(exc).__name__,
+                "traceback": tb.splitlines()[-8:],
                 "video_id": data.video_id,
                 "stage": "crowd_pipeline",
             },
