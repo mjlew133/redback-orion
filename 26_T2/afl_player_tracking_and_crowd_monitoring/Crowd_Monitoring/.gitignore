@@ -34,6 +34,10 @@ htmlcov/
 *.pt
 *.pth
 *.onnx
+*.engine        # TensorRT engines are machine/GPU/driver-specific; rebuild locally
+*.plan
+*_openvino_model/
+*_ncnn_model/
 
 # Data and generated outputs
 data/

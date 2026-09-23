@@ -1,11 +1,18 @@
 """Vision-analysis helpers for crowd behaviour analytics."""
 
+import os
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Farneback optical flow is per-pixel dense - running it on 4K frames costs
+# seconds per pair. Resize each frame to this width before the flow and scale
+# the resulting magnitudes back up so they stay comparable to the thresholds in
+# event_detection. 0 disables the downscale (original behaviour).
+MOTION_FLOW_WIDTH = int(os.environ.get("CROWD_MOTION_FLOW_WIDTH", "640"))
 
 
 def resolve_frame_paths(input_data):
@@ -53,6 +60,14 @@ def extract_motion_features(frames):
             "motion_intensity": 0.0,
         }
 
+    # downscale for the flow, then scale magnitudes back to full-res units
+    mag_scale = 1.0
+    if MOTION_FLOW_WIDTH and frames[0].shape[1] > MOTION_FLOW_WIDTH:
+        s = MOTION_FLOW_WIDTH / frames[0].shape[1]
+        frames = [cv2.resize(f, (MOTION_FLOW_WIDTH, max(1, round(f.shape[0] * s))),
+                             interpolation=cv2.INTER_AREA) for f in frames]
+        mag_scale = 1.0 / s
+
     magnitudes = []
     reverse_flow_ratios = []
 
@@ -74,7 +89,7 @@ def extract_motion_features(frames):
         )
 
         mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
-        magnitudes.append(float(np.mean(mag)))
+        magnitudes.append(float(np.mean(mag)) * mag_scale)
 
         angle_bins = ((ang % 360) // 90).astype(int)
         bin_counts = np.bincount(angle_bins.ravel(), minlength=4)
