@@ -158,8 +158,25 @@ class VisionMetrics(BaseModel):
 
 class DetectionRequest(BaseModel):
     video_id: str = Field(..., examples=["match_01"])
-    video_path: str = Field(..., examples=["data/raw/match_01.mp4"])
+    video_path: str = Field(
+        ...,
+        examples=["data/raw/match_01.mp4"]
+    )
 
+    stadium_id: Optional[str] = Field(
+        default="STADIUM_01",
+        examples=["STADIUM_01"]
+    )
+
+    camera_id: Optional[str] = Field(
+        default="CAM_02",
+        examples=["CAM_02"]
+    )
+
+    zone_id: Optional[str] = Field(
+        default="ZONE_B",
+        examples=["ZONE_B"]
+    )
 
 class ProcessingErrorResponse(BaseModel):
     detail: str = Field(..., examples=["Internal processing error while running crowd detection pipeline"])
