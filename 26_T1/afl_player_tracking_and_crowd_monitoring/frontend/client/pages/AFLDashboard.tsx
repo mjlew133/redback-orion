@@ -66,8 +66,6 @@ import {
   Upload,
   Search,
   Filter,
-  Play,
-  Pause,
   TrendingUp,
   TrendingDown,
   Clock,
@@ -292,7 +290,6 @@ export default function AFLDashboard() {
   const [playersError, setPlayersError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTeam, setSelectedTeam] = useState("all");
-  const [isLive, setIsLive] = useState(true);
   const [userEmail, setUserEmail] = useState("");
   const [activeQueueItemId, setActiveQueueItemId] = useState<string | null>(null);
 
@@ -1792,23 +1789,9 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
               </div>
             </div>
 
-            {/* Live, Settings and Logout */}
+            {/* Settings and Logout */}
             <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-start sm:gap-5">
-              <Badge
-                variant={isLive ? "destructive" : "secondary"}
-                className="shrink-0 px-3 py-1"
-              >
-                <span
-                  className={`mr-2 h-2 w-2 rounded-full ${
-                    isLive
-                      ? "animate-pulse bg-white"
-                      : "bg-gray-500"
-                  }`}
-                />
-
-                {isLive ? "LIVE" : "OFFLINE"}
-              </Badge>
-
+             
               {userEmail && (
                 <span className="hidden whitespace-nowrap text-sm text-gray-600 xl:block">
                   Welcome, {userEmail}

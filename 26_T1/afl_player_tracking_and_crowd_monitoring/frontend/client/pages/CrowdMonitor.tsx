@@ -172,6 +172,8 @@ export default function CrowdMonitor() {
   const [selectedZone, setSelectedZone] = useState(crowdZones[0]);
   const [viewMode, setViewMode] = useState("heatmap");
   const [timeRange, setTimeRange] = useState("live");
+  const anomalyZones = crowdZones.filter((zone) => zone.density >= 90);
+  const hasAnomaly = anomalyZones.length > 0;
 
   // Simulate real-time crowd updates
   useEffect(() => {
@@ -228,7 +230,21 @@ export default function CrowdMonitor() {
               Stadium crowd density and safety analytics
             </p>
           </div>
-          
+          {hasAnomaly && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-400 bg-amber-50 p-4 text-amber-950 dark:border-amber-500/60 dark:bg-amber-950/30 dark:text-amber-100">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+
+              <div>
+                <h2 className="font-semibold">Anomaly Alert</h2>
+
+                <p className="mt-1 text-sm">
+                  Unusual crowd activity detected in{" "}
+                  {anomalyZones.map((zone) => zone.name).join(", ")}. Please review the
+                  live crowd data and take appropriate action if required.
+                </p>
+              </div>
+            </div>
+          )}
           {/* Overview Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>
