@@ -30,6 +30,36 @@ def process_detection_route(data: DetectionRequest):
     """Run the crowd detection service flow."""
     return process_detection(data.model_dump())
 
+@router.post(
+    "/process-stadium-monitoring",
+    response_model=StadiumMonitoringResponse,
+    responses={
+        500: {
+            "model": ProcessingErrorResponse,
+            "description": "Internal processing error while running the stadium monitoring pipeline",
+        }
+    },
+)
+def process_stadium_monitoring_route(data: DetectionRequest):
+    """Run crowd, fire, stampede, and aggregation pipeline."""
+    try:
+        return process_stadium_monitoring(data.model_dump())
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(tb)
+
+        message = str(exc).strip() or f"{type(exc).__name__}: {exc!r}"
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": message,
+                "error_type": type(exc).__name__,
+                "traceback": tb.splitlines()[-8:],
+                "video_id": data.video_id,
+                "stage": "stadium_monitoring_pipeline",
+            },
+        )
 
 @router.post("/process-analytics", response_model=AnalyticsResponse)
 def process_analytics_route(data: AnalyticsRequest):
