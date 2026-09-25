@@ -273,7 +273,7 @@ def process_crowd_detection(data: dict):
         stadium_id=data.get("stadium_id", "STADIUM_01"),
     )
 
-_print_benchmark_report(detection_result, timings)
-aggregated_result["stage_timings_ms"] = timings
+    _print_benchmark_report(detection_result, timings)
+    aggregated_result["stage_timings_ms"] = timings
 
-return aggregated_result
+    return aggregated_result
