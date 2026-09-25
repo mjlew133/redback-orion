@@ -8,7 +8,10 @@ from fastapi.responses import JSONResponse
 from .crowd_analytics_service import process_analytics
 from .crowd_detection_service import process_detection
 from .crowd_intelligence_service import process_intelligence
-from .crowd_pipeline_service import process_crowd_detection
+from .crowd_pipeline_service import (
+    process_crowd_detection,
+    process_stadium_monitoring,
+)
 from .models import (
     AnalyticsRequest,
     AnalyticsResponse,
