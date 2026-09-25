@@ -274,6 +274,6 @@ def process_crowd_detection(data: dict):
     )
 
     _print_benchmark_report(detection_result, timings)
-    aggregated_result["stage_timings_ms"] = timings
+    payload["stage_timings_ms"] = timings
 
-    return aggregated_result
+    return payload
