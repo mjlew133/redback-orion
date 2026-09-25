@@ -277,3 +277,26 @@ def process_crowd_detection(data: dict):
     payload["stage_timings_ms"] = timings
 
     return payload
+
+def process_stadium_monitoring(data: dict):
+    """Run crowd, fire, stampede, and stadium aggregation."""
+
+    crowd_result = process_crowd_detection(data)
+
+    detection_result = process_detection(data)
+
+    safety_result = process_safety_detection(
+        video_data=data,
+        frame_data=detection_result,
+        camera_id=data.get("camera_id", "CAM_02"),
+        zone_id=data.get("zone_id", "ZONE_B"),
+    )
+
+    aggregated_result = aggregate_stadium_data(
+        crowd_data=crowd_result,
+        fire_data=safety_result["fire"],
+        stampede_data=safety_result["stampede"],
+        stadium_id=data.get("stadium_id", "STADIUM_01"),
+    )
+
+    return aggregated_result
