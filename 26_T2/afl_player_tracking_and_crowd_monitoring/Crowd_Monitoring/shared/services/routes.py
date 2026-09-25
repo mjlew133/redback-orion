@@ -43,7 +43,7 @@ def process_intelligence_route(data: IntelligenceRequest):
 
 @router.post(
     "/process-crowd-detection",
-    response_model=StadiumMonitoringResponse,
+    response_model=CrowdPipelineResponse,
     responses={
         500: {
             "model": ProcessingErrorResponse,
