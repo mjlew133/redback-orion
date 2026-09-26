@@ -44,7 +44,7 @@ const generateCrowdData = () => {
       capacity: 15000,
       current: 13200,
       color: "#ef4444", // red-500
-      coordinates: { x: 50, y: 12, width: 40, height: 12 },
+      coordinates: { x: 50, y: 12, width: 40, height: 11 },
       entryPoints: ["Gate A", "Gate B"],
       facilities: ["Toilets", "Food Court", "Merchandise"],
       temperature: 24,
@@ -56,7 +56,7 @@ const generateCrowdData = () => {
       capacity: 8000,
       current: 6800,
       color: "#f97316", // orange-500
-      coordinates: { x: 50, y: 0, width: 40, height: 12 },
+      coordinates: { x: 50, y: 0, width: 40, height: 11 },
       entryPoints: ["Gate A-Upper"],
       facilities: ["Toilets", "Bar"],
       temperature: 26,
@@ -73,7 +73,7 @@ const generateCrowdData = () => {
       capacity: 12000,
       current: 11400,
       color: "#dc2626", // red-600
-      coordinates: { x: 50, y: 76, width: 40, height: 12 },
+      coordinates: { x: 50, y: 77, width: 40, height: 11 },
       entryPoints: ["Gate C", "Gate D"],
       facilities: ["Toilets", "Food Court", "First Aid"],
       temperature: 23,
@@ -85,7 +85,7 @@ const generateCrowdData = () => {
       capacity: 6000,
       current: 5700,
       color: "#dc2626", // red-600
-      coordinates: { x: 50, y: 88, width: 40, height: 12 },
+      coordinates: { x: 50, y: 89, width: 40, height: 11 },
       entryPoints: ["Gate C-Upper"],
       facilities: ["Premium Bar"],
       temperature: 25,
@@ -380,7 +380,7 @@ export default function CrowdMonitor() {
                            hover:scale-105 hover:z-10 hover:shadow-xl hover:ring-2 hover:ring-white
                            border-transparent ${
                           selectedZone.id === zone.id
-                            ? "border-white border-4"
+                            ? "border-white"
                             : "border-transparent"
                         } ${
                            zone.name.includes("Stand") || zone.name.includes("Premium")
@@ -397,8 +397,8 @@ export default function CrowdMonitor() {
                         }}
                       >
                          <div className="text-white text-xs font-medium text-center h-full flex flex-col justify-center leading-tight px-1">
-                          <div className="truncate">
-                            {zone.name.split(" - ")[0]}
+                          <div className="truncate" title={zone.name}>
+                            {zone.name.replace(" - ", " ")}
                           </div>
                             <div>{zone.density}% · {zone.current.toLocaleString()}</div>
                         </div>
