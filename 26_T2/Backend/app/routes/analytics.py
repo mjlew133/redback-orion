@@ -198,30 +198,29 @@ def _crowd_summary(
     }
 
 
-@router.get("/analysis/latest")
-def latest_analysis(
+@router.get("/analysis/{job_id}")
+def get_analysis(
+    job_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    print("1st INN")
-    job = _latest_job(
+    job = _get_job(
+        job_id,
         db,
         current_user,
     )
-    print("INN")
 
-    if not job:
-        print("Not innnnn")
+    if job.status not in ["done", "partial"]:
         raise HTTPException(
-            status_code=404,
-            detail=("No completed analysis " "is available"),
+            status_code=409,
+            detail="Analysis is not complete",
         )
-    print("retrurrn")
+
     return {
         "job_id": str(job.job_id),
         "status": job.status,
-        "created_at": (job.created_at),
-        "updated_at": (job.updated_at),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
         "player": player_with_urls(job.player_result),
         "crowd": crowd_with_urls(job.crowd_result),
         "error": job.error,
