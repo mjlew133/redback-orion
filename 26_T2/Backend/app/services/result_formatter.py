@@ -96,3 +96,12 @@ def player_with_urls(
         tackle["csv_url"] = _player_url(tackle.get("csv_url"))
 
     return result
+
+
+def format_player_tracking(
+    tracking: dict | None,
+) -> dict | None:
+    if not tracking:
+        return None
+
+    return tracking

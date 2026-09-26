@@ -19,6 +19,7 @@ from app.models import Job
 from app.services.result_formatter import (
     crowd_with_urls,
     player_with_urls,
+    format_player_tracking
 )
 
 from app.schemas.jobs import CrowdResponse
@@ -290,27 +291,36 @@ def get_crowd(
     }
 
 
-@router.get("/player-tracking/latest")
-def latest_player_tracking(
+@router.get("/player-tracking/{job_id}")
+def get_player_tracking(
+    job_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    job = _latest_job(
+    job = _get_job(
+        job_id,
         db,
         current_user,
     )
 
-    if not job or not job.player_result:
+    if not job.player_result:
         raise HTTPException(
             status_code=404,
-            detail=("No completed player " "analysis is available"),
+            detail="Player tracking result is not available for this job",
+        )
+
+    tracking_result = job.player_result.get("tracking")
+
+    if not tracking_result:
+        raise HTTPException(
+            status_code=404,
+            detail="Player tracking result is not available for this job",
         )
 
     return {
         "job_id": str(job.job_id),
         "status": job.status,
-        "created_at": (job.created_at),
-        "updated_at": (job.updated_at),
-        "player": player_with_urls(job.player_result),
-        "summary": _player_summary(job.player_result),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "player": format_player_tracking(tracking_result),
     }
