@@ -368,6 +368,22 @@ export default function MobileNavigation() {
               })}
             </div>
           </div>
+
+          {/* Desktop Logout */}
+          <div className="border-t p-4">
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
+            >
+              <LogOut className="h-5 w-5 shrink-0" />
+
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">Logout</div>
+                <div className="text-xs text-red-400">Sign out of your account</div>
+              </div>
+            </button>
+          </div>
         </div>
       </nav>
 
