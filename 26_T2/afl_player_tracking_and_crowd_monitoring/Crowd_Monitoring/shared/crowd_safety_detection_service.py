@@ -1,9 +1,14 @@
 """Shared integration service for fire and stampede detection."""
 
+import os
 from typing import Any
 
 from fire_detection.main import process_video as process_fire
 from stampede_detection.main import analyze_stampede
+
+# Set CROWD_ENABLE_STAMPEDE=false to skip stampede detection (e.g. on machines
+# without CUDA). Zones then report no stampede events.
+ENABLE_STAMPEDE = os.environ.get("CROWD_ENABLE_STAMPEDE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_stampede_event(
@@ -97,12 +102,15 @@ def process_safety_detection(
     # STAMPEDE DETECTION
     # --------------------------------------------------
 
-    stampede_result = analyze_stampede(
-        input_source=video_data,
-        video_id=video_id,
-        camera_id=camera_id,
-        zone_id=zone_id,
-    )
+    if ENABLE_STAMPEDE:
+        stampede_result = analyze_stampede(
+            input_source=video_data,
+            video_id=video_id,
+            camera_id=camera_id,
+            zone_id=zone_id,
+        )
+    else:
+        stampede_result = {"video_id": video_id, "events": []}
 
     events = stampede_result.get("events", [])
 
