@@ -340,7 +340,3 @@ class StadiumMonitoringResponse(BaseModel):
         default_factory=dict,
         description="Wall time per pipeline stage, milliseconds",
     )
-
-class AggregatedCrowdResponse
-
-class AggregatedZoneResponse
