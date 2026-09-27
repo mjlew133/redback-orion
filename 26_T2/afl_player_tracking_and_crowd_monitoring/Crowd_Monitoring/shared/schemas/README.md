@@ -18,6 +18,7 @@ Each schema file should tell the team:
 - `detection_schema.md`
 - `analytics_schema.md`
 - `intelligence_schema.md`
+- `crowd_pipeline_schema.md` - combined `/process-crowd-detection` endpoint used by the frontend
 
 ## Important Rule
 

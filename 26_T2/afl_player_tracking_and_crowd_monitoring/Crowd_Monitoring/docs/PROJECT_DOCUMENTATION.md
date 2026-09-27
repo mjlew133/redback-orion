@@ -24,10 +24,13 @@ The objective of the Crowd Monitoring module is to develop a crowd analytics pip
 Video Input
     |
     v
-Frame Extraction (OpenCV)
+Frame Extraction + Tiling (OpenCV)
     |
     v
-Person Detection (YOLOv8)
+Crowd Region Masking (exclude polygons)
+    |
+    v
+Person Detection (YOLO26m CrowdHuman, tiled)
     |
     v
 Crowd Density Estimation
@@ -49,7 +52,9 @@ Behaviour Analysis / Optional Prediction
 
 - Python
 - OpenCV
-- YOLOv8 (Ultralytics)
+- Ultralytics YOLO (YOLO26m trained on CrowdHuman for people detection)
+- ONNX Runtime + DirectML, CUDA/TensorRT and OpenVINO inference backends
+- FastAPI / Uvicorn
 - NumPy
 - Pandas
 - Matplotlib
@@ -79,6 +84,24 @@ Prepare raw stadium footage for the rest of the pipeline.
 - a reusable preprocessing script or notebook
 
 
+### 1b. Crowd Region Preprocessing
+
+#### Purpose
+
+Remove fixed non-crowd areas (roof, signage, concourse, foreground rails) before detection so the detector skips them and doesn't produce false positives there.
+
+#### Main Work
+
+- mark exclude polygons for a camera view with the `pick_region.py` tool
+- build one reusable keep-mask per video from those polygons
+- pass the mask to crowd detection, which applies it to each frame
+
+#### Expected Output
+
+- `crowd_mask` attached to the processed video
+- optional masked frames for debugging
+
+
 ### 2. Crowd Detection
 
 #### Purpose
@@ -87,16 +110,19 @@ Detect spectators in stadium footage at the person level.
 
 #### Main Work
 
-- run YOLOv8 on extracted frames
-- identify people in the scene
+- run a YOLO26m model trained on CrowdHuman on the masked frames
+- split high-resolution frames into overlapping tiles so distant spectators can be detected, then merge the results with seam handling and cross-tile NMS
+- skip tiles that are almost entirely masked out, and run the detector only on every Nth frame (reusing detections in between)
+- support DirectML, CUDA/TensorRT and OpenVINO backends
 - store detections with coordinates and confidence values
-- visualise sample detections
+- visualise sample detections and record a per-run benchmark summary
 
 #### Expected Output
 
 - person detections
 - bounding boxes
 - structured detection data
+- `detection_summary_run_NNN.json` benchmark files
 
 
 ### 3. Density and Zoning
@@ -170,10 +196,13 @@ Analyse movement patterns in the crowd and identify unusual or risky behaviour.
 - detect sudden crowd movement
 - detect abnormal behaviour
 - detect crowd surges
+- classify the crowd-state trend (`increasing_density`, `dispersing`, `stable`) from per-frame person counts
+- track individuals and classify them as stationary, walking or running (optional pose-based check)
 
 #### Expected Output
 
 - event flags
+- crowd state and density trend
 - movement summaries
 - behaviour-oriented analytics
 
@@ -199,6 +228,7 @@ Explore a predictive analytics component if time permits.
 The tasks are connected in a practical sequence:
 
 1. `video_processing` prepares usable input.
+   - `crowd_region_preprocessing` builds the exclude mask applied before detection.
 2. `crowd_detection` produces person-level detections.
 3. `density_zoning` converts detections into measurable crowd metrics.
 4. `heatmap` visualises density and distribution.
