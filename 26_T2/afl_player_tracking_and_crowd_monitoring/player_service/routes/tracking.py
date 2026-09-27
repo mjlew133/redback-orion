@@ -38,12 +38,7 @@ async def player_tracking(video: UploadFile = File(...)):
             output_video=str(output_video),
             save_json=False
         )
-        return {
-            "status": "success",
-            "video_info": results["video_info"],
-            "tracking_results": results["tracking_results"],
-            "video_url": f"/outputs/{output_video.name}"
-        }
+        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

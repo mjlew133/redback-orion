@@ -45,9 +45,57 @@ class JobSummary(BaseModel):
         return str(value)
 
 
+class CrowdSummary(BaseModel):
+    total_frames_processed: Optional[int] = None
+    peak_person_count: Optional[int] = None
+    crowd_state: Optional[str] = None
+    highest_density_zone: Optional[str] = None
+    highest_risk_zone: Optional[str] = None
+
+
+class CrowdPeakFrame(BaseModel):
+    frame_id: Optional[int] = None
+    timestamp: Optional[float] = None
+    person_count: Optional[int] = None
+    people_annotated_frame_path: Optional[str] = None
+    annotated_frame_path: Optional[str] = None
+
+
+class CrowdVisual(BaseModel):
+    image_path: Optional[str] = None
+
+
+class CrowdAnomalyVisual(BaseModel):
+    event_type: Optional[str] = None
+    image_path: Optional[str] = None
+
+
+class CrowdDensityZone(BaseModel):
+    zone_id: Optional[str] = None
+    person_count: Optional[int] = None
+    density: Optional[float] = None
+    risk_level: Optional[str] = None
+    flagged: Optional[bool] = None
+
+
+class CrowdDensityExtremes(BaseModel):
+    highest_density_zone: Optional[CrowdDensityZone] = None
+    lowest_density_zone: Optional[CrowdDensityZone] = None
+
+
+class CrowdResult(BaseModel):
+    video_id: Optional[str] = None
+    summary: Optional[CrowdSummary] = None
+    peak_crowd_frame: Optional[CrowdPeakFrame] = None
+    anomaly_visual: Optional[CrowdAnomalyVisual] = None
+    heatmap: Optional[CrowdVisual] = None
+    time_series_chart: Optional[CrowdVisual] = None
+    density_extremes: Optional[CrowdDensityExtremes] = None
+
+
 class JobResults(BaseModel):
     player: Optional[Any] = None
-    crowd: Optional[Any] = None
+    crowd: Optional[CrowdResult] = None
 
 
 class JobErrors(BaseModel):
@@ -149,3 +197,18 @@ class JobListResponse(BaseModel):
     page: int
     limit: int
     jobs: List[JobSummary]
+    
+
+class CrowdResponse(BaseModel):
+    job_id: UUID
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    crowd: CrowdResult
+
+    @field_serializer("job_id")
+    def serialize_uuid(
+        self,
+        value: UUID
+    ) -> str:
+        return str(value)
