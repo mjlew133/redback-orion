@@ -28,6 +28,8 @@ Video Input
     ->
 Video Processing
     ->
+Crowd Region Preprocessing (exclude mask)
+    ->
 Crowd Detection
     ->
 Density Zoning
@@ -37,6 +39,8 @@ Heatmap
 Crowd Behaviour Analytics
     ->
 Crowd Allocation / Risk Zone
+```
+
 This repository contains the Crowd Monitoring module for the Orion project under Redback Operations.
 
 The purpose of this module is to analyse stadium crowd behaviour and density using computer vision and data analytics. The expected outputs include:
@@ -61,10 +65,13 @@ The purpose of this module is to analyse stadium crowd behaviour and density usi
 Video Input
     |
     v
-Frame Extraction (OpenCV)
+Frame Extraction + Tiling (OpenCV)
     |
     v
-Person Detection (YOLOv8)
+Crowd Region Masking (exclude polygons)
+    |
+    v
+Person Detection (YOLO26m CrowdHuman, tiled)
     |
     v
 Crowd Density Estimation
@@ -87,7 +94,8 @@ Behaviour Analysis / Prediction
 - Python
 - FastAPI
 - Uvicorn
-- YOLOv8 (Ultralytics)
+- Ultralytics YOLO (YOLO26m trained on CrowdHuman for people detection)
+- Inference backends: ONNX Runtime + DirectML (AMD/Intel GPU), CUDA/TensorRT (NVIDIA), OpenVINO (CPU)
 - OpenCV
 - NumPy
 - Pandas
@@ -106,6 +114,7 @@ Each member should use:
 Current task folders:
 
 - `video_processing/`
+- `crowd_region_preprocessing/` - masks fixed non-crowd regions (roof, signage, rails); includes the `pick_region.py` polygon picker
 - `crowd_detection/`
 - `density_zoning/`
 - `heatmap/`
@@ -114,15 +123,20 @@ Current task folders:
 - `crowd_allocation_risk_zone/`
 - `prediction_optional/`
 
+Supporting folders:
+
+- `benchmarking/` - compares detection models against ground-truth counts (see its README)
+- `test_pipeline.py` - runs the pipeline end to end from the command line
+
 ## Shared Folder
 
 ### `shared/config/`
 
-Contains shared settings such as thresholds, paths, and common configuration values.
+Contains shared JSON settings: `video_processing_config.json` (tiling grid) and `crowd_region_preprocessing_config.json` (exclude polygons).
 
 ### `shared/schemas/`
 
-Contains the agreed request and response JSON contracts for the 3 services.
+Contains the agreed request and response JSON contracts for the services, including the combined `crowd_pipeline_schema.md`.
 
 ### `shared/services/`
 
@@ -133,20 +147,29 @@ Contains the FastAPI service layer:
 - `models.py` defines typed request and response models
 - service files call functions from the task folders
 
+### `shared/timing.py`
+
+The `timed()` helper the service layer uses to record stage timings for the combined benchmark report.
+
 ## Current Structure
 
 ```text
-2026_T1/
+crowd_monitoring/
 |- README.md
 |- requirements.txt
+|- Dockerfile
+|- test_pipeline.py
 |- data/
 |- docs/
+|- benchmarking/
 |- shared/
 |  |- README.md
+|  |- timing.py
 |  |- config/
 |  |- schemas/
 |  `- services/
 |- video_processing/
+|- crowd_region_preprocessing/
 |- crowd_detection/
 |- density_zoning/
 |- heatmap/
@@ -172,13 +195,16 @@ Schema-based JSON Response
 
 ## API Endpoints
 
-The current service layer exposes 3 main endpoints:
+The current service layer exposes:
 
 - `POST /process-detection`
 - `POST /process-analytics`
 - `POST /process-intelligence`
+- `POST /process-crowd-detection` - full pipeline in one call; this is the endpoint the frontend uses
+- `GET /demo` - demo page for the full pipeline
 
 These endpoints use typed FastAPI models so Swagger can show clear request and response formats.
+Each full-pipeline run also prints one combined `PIPELINE BENCHMARK` report to the server console.
 
 ## Working Rule
 
@@ -203,6 +229,27 @@ These endpoints use typed FastAPI models so Swagger can show clear request and r
 ```bash
 pip install -r requirements.txt
 ```
+
+`requirements.txt` installs a CPU-only setup (crowd detection runs on OpenVINO). Crowd detection
+automatically uses the fastest backend available (`CROWD_DEVICE=auto`), so installing
+one of the following is enough to switch to the GPU:
+
+- **NVIDIA** - install the CUDA build of torch *before* the base requirements:
+  ```bash
+  pip install -r requirements-nvidia.txt
+  pip install -r requirements.txt
+  ```
+  If a CPU-only torch is already installed, add `--force-reinstall` to the first command.
+- **AMD / Intel (DirectML, Windows)** - remove other onnxruntime builds, install, then export the ONNX model (it isn't in git):
+  ```bash
+  pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+  pip install -r requirements-amd.txt
+  yolo export model=crowd_detection/yolo26mcrowdpeoplefaces.pt format=onnx imgsz=640 dynamic=True opset=17
+  ```
+
+Each file's header comments explain the steps and how to check the GPU is being used.
+
+See `crowd_detection/README.md` for all backend options.
 
 ## Run FastAPI Service
 
@@ -233,7 +280,7 @@ Each team member owns one task. Follow the README in each task folder for detail
 | # | Task Folder | Team Member | Objective |
 |---|-------------|-------------|-----------|
 | 1 | **video_processing** | Member 1 | Extract frames and prepare video data |
-| 2 | **crowd_detection** | Member 2 | Detect persons using YOLOv8 |
+| 2 | **crowd_detection** | Member 2 | Detect persons using YOLO (tiled, crowd-masked) |
 | 3 | **density_zoning** | Member 3 | Calculate density and zone-based analytics |
 | 4 | **heatmap** | Member 4 | Generate crowd heatmaps |
 | 5 | **analytics_output** | Member 5 | Create reports and output files (JSON/CSV) |
@@ -260,16 +307,18 @@ This keeps the semester plan split into smaller, easier-to-manage work packages.
 ## Project Structure
 
 ```text
-2026_T1/
+crowd_monitoring/
 |-- data/                           # Sample videos and frames
 |-- docs/                           # Documentation and notes
 |-- shared/                         # Common utilities and configs
+|-- benchmarking/                   # Detection model benchmarking
 |-- requirements.txt                # Dependencies
 |-- README.md                       # This file
 |
 |-- Task Folders (one per member):
 |-- video_processing/               # Task 1: Video extraction & preparation
-|-- crowd_detection/                # Task 2: Person detection (YOLOv8)
+|-- crowd_region_preprocessing/     # Exclude-mask for non-crowd regions
+|-- crowd_detection/                # Task 2: Person detection (YOLO26m, tiled)
 |-- density_zoning/                 # Task 3: Density & zone analysis
 |-- heatmap/                        # Task 4: Heatmap generation
 |-- analytics_output/               # Task 5: Report generation
@@ -298,6 +347,8 @@ Tasks run in sequence:
 
 ```
 video_processing (Task 1)
+         ↓
+crowd_region_preprocessing
          ↓
 crowd_detection (Task 2)
          ↓
