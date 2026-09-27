@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from .crowd_analytics_service import process_analytics
 from .crowd_detection_service import process_detection
-from shared.crowd_safety_detection_service import process_safety_detection
+from shared.crowd_safety_detection_service import ENABLE_STAMPEDE, process_safety_detection
 from data_aggregation.main import aggregate_stadium_data
 from crowd_allocation_risk_zone.main import assess_risk
 from crowd_behaviour_analytics.main import analyze_behaviour
@@ -21,62 +21,149 @@ def _safe_round(value, digits=2):
     return round(float(value), digits)
 
 
-def _print_benchmark_report(detection_result: dict, timings: dict) -> None:
+_REPORT_WIDTH = 54
+
+
+def _report_section(title: str, seconds: float | None = None) -> str:
+    """Section heading, with the section's total time right-aligned if known."""
+    if seconds is None:
+        return title
+    return f"{title:<{_REPORT_WIDTH - 8}}{seconds:6.2f} s"
+
+
+def _report_row(label: str, value, note: str = "") -> str:
+    """One indented report line: label, value, then an optional note."""
+    return f"  {label:<19}{value!s:<9}{note}".rstrip()
+
+
+def _report_count(count: int, total: int) -> str:
+    return f"{count} of {total} ({count / total:.0%})" if total else f"{count} of {total}"
+
+
+def _print_benchmark_report(
+    detection_result: dict,
+    timings: dict,
+    fire_result: dict | None = None,
+    stampede_result: dict | None = None,
+) -> None:
     """One combined report for the whole run, printed once at the end,
     instead of each stage printing its own piece as it finishes."""
     vt = detection_result.get("video_processing_timings") or {}
     ds = detection_result.get("detection_summary") or {}
     stage_ms = detection_result.get("stage_timings_ms") or {}
     vs = vt.get("video_stats") or {}
+    total_s = sum(timings.values()) / 1000
 
-    lines = ["", "========== PIPELINE BENCHMARK =========="]
+    lines = ["", " PIPELINE BENCHMARK ".center(_REPORT_WIDTH, "=")]
+
+    overview = []
+    if vs.get("duration") is not None:
+        overview.append(f"{vs['duration']} s")
+    if vt:
+        overview.append(f"{vt.get('frames_read', 0)} frames read, {vt.get('processed_frames', 0)} processed")
+    if overview:
+        lines.append(f"Video: {', '.join(overview)}")
+    lines.append(f"Total: {total_s:.2f} s")
 
     if vt:
+        stats_note = (
+            f"{vs.get('statistics_samples')} samples, blur threshold {vs.get('threshold')}"
+            if vs and vs.get("note") is None else ""
+        )
         lines += [
             "",
-            "VIDEO PROCESSING",
-            "-----------------------------------------------",
-            f"Video stats:            {vt.get('stats_seconds', 0):.2f} s"
-            + (f"  (duration {vs['duration']}s, {vs.get('statistics_samples')} samples,"
-               f" threshold {vs.get('threshold')})" if vs.get("note") is None and vs else ""),
-            f"Video decoding:         {vt.get('decoding_seconds', 0):.2f} s",
-            f"  Main-loop reads:      {vt.get('main_read_seconds', 0):.2f} s",
-            f"  Blur-recovery reads:  {vt.get('recovery_read_seconds', 0):.2f} s",
-            f"Blur detection:         {vt.get('blur_seconds', 0):.2f} s",
-            f"CLAHE enhancement:      {vt.get('clahe_seconds', 0):.2f} s",
-            f"Tiling:                 {vt.get('tiling_seconds', 0):.2f} s",
-            f"JPEG writing:           {vt.get('jpeg_write_seconds', 0):.2f} s",
-            f"Frames read/sampled/processed/CLAHE/tiles: "
-            f"{vt.get('frames_read', 0)}/{vt.get('sampled_frames', 0)}/{vt.get('processed_frames', 0)}/"
-            f"{vt.get('clahe_frames', 0)}/{vt.get('tiles_generated', 0)}",
-            f"Video processing total: {vt.get('total_seconds', 0):.2f} s",
+            _report_section("VIDEO PROCESSING", vt.get("total_seconds", 0)),
+            _report_row("Video stats", f"{vt.get('stats_seconds', 0):.2f} s", stats_note),
+            _report_row(
+                "Decoding", f"{vt.get('decoding_seconds', 0):.2f} s",
+                f"main {vt.get('main_read_seconds', 0):.2f} s, "
+                f"blur recovery {vt.get('recovery_read_seconds', 0):.2f} s",
+            ),
+            _report_row("Blur detection", f"{vt.get('blur_seconds', 0):.2f} s"),
+            _report_row("CLAHE", f"{vt.get('clahe_seconds', 0):.2f} s", f"{vt.get('clahe_frames', 0)} frames"),
+            _report_row("Tiling", f"{vt.get('tiling_seconds', 0):.2f} s", f"{vt.get('tiles_generated', 0):,} tiles"),
+            _report_row("JPEG writing", f"{vt.get('jpeg_write_seconds', 0):.2f} s"),
         ]
 
     if ds:
+        detect_ms = stage_ms.get("crowd_detection")
+        summary_path = ds.get("summary_json_path") or ""
+        try:
+            summary_path = Path(summary_path).resolve().relative_to(PROJECT_ROOT).as_posix()
+        except ValueError:
+            pass
         lines += [
             "",
-            "CROWD DETECTION",
-            "-----------------------------------------------",
-            f"Model:                  {ds.get('model')} ({ds.get('backend')} on {ds.get('device')})",
-            f"Model load:             {ds.get('model_load_seconds', 0):.2f} s",
-            f"Frame I/O:              {ds.get('frame_io_seconds', 0):.2f} s (read+mask+draw+write, "
-            f"{ds.get('frames_detected', 0)} detected frame(s))",
-            f"Inference:              {ds.get('total_detection_seconds', 0):.2f} s over "
-            f"{ds.get('frames_processed', 0)} frame(s) ({ds.get('frames_detected', 0)} detected, "
-            f"stride {ds.get('detect_stride')}, {ds.get('ms_per_detected_frame', 0):.0f} ms each)",
-            f"Peak people/frame:      {ds.get('peak_people_per_frame', 0)}",
-            f"Summary json:           {ds.get('summary_json_path')}",
+            _report_section("CROWD DETECTION", detect_ms / 1000 if detect_ms is not None else None),
+            _report_row("Model", f"{ds.get('model')} ({ds.get('backend')} on {ds.get('device')})"),
+            _report_row("Model load", f"{ds.get('model_load_seconds', 0):.2f} s"),
+            _report_row(
+                "Inference", f"{ds.get('total_detection_seconds', 0):.2f} s",
+                f"{ds.get('frames_detected', 0)} of {ds.get('frames_processed', 0)} frames "
+                f"(stride {ds.get('detect_stride')}), {ds.get('ms_per_detected_frame', 0):,.0f} ms each",
+            ),
+            _report_row("Frame I/O", f"{ds.get('frame_io_seconds', 0):.2f} s"),
+            _report_row("Peak people", ds.get("peak_people_per_frame", 0)),
+            _report_row("Summary", summary_path),
         ]
 
-    lines += ["", "STAGE TIMINGS", "-----------------------------------------------"]
-    for label, ms in stage_ms.items():
-        lines.append(f"{label:<24} {ms / 1000:6.2f} s")
+    if fire_result is not None:
+        fire_dets = fire_result.get("detections") or []
+        fire_frames = [d for d in fire_dets if d.get("fire_detected")]
+        smoke_count = sum(1 for d in fire_dets if d.get("smoke_detected"))
+        peak = max(fire_frames, key=lambda d: d.get("confidence") or 0, default=None)
+        peak_text = (
+            f"{peak.get('confidence') or 0:.2f} {peak.get('severity')} at "
+            f"{peak.get('timestamp')} s (frame {peak.get('frame_id')})"
+            if peak else "none"
+        )
+        lines += [
+            "",
+            _report_section("FIRE DETECTION"),
+            _report_row("Fire frames", _report_count(len(fire_frames), len(fire_dets))),
+            _report_row("Smoke frames", _report_count(smoke_count, len(fire_dets))),
+            _report_row("Peak", peak_text),
+        ]
+
+    if stampede_result is not None:
+        lines.append("")
+        if not ENABLE_STAMPEDE:
+            lines.append(f"{'STAMPEDE DETECTION':<21}skipped (CROWD_ENABLE_STAMPEDE=false)")
+        else:
+            events = stampede_result.get("detections") or []
+            stampede_events = [e for e in events if e.get("stampede_detected")]
+            peak = max(stampede_events, key=lambda e: e.get("confidence") or 0, default=None)
+            peak_text = (
+                f"{peak.get('confidence') or 0:.2f} {peak.get('severity')} at "
+                f"{peak.get('timestamp')} s, {peak.get('crowd_count')} people moving "
+                f"{peak.get('movement_direction')} at {peak.get('movement_speed')}"
+                if peak else "none"
+            )
+            lines += [
+                _report_section("STAMPEDE DETECTION"),
+                _report_row("Events", len(events)),
+                _report_row("Stampede events", len(stampede_events)),
+                _report_row("Peak", peak_text),
+            ]
+
+    stage_labels = {"safety_detection": "safety_detection (fire + stampede)"}
+
+    def timing_row(label: str, ms: float, indent: int) -> str:
+        pct = f"{ms / 1000 / total_s:.0%}" if total_s else "-"
+        return f"{' ' * indent}{label:<{40 - indent}}{ms / 1000:7.2f}{pct:>7}"
+
+    lines += ["", f"{'STAGE TIMINGS':<40}{'s':>7}{'%':>7}"]
+    # Sub-stages recorded inside "detection" are shown indented beneath it, so
+    # they don't read as extra time on top of it.
     for label, ms in timings.items():
-        lines.append(f"{label:<24} {ms / 1000:6.2f} s")
+        lines.append(timing_row(stage_labels.get(label, label), ms, 2))
+        if label == "detection":
+            for sub_label, sub_ms in stage_ms.items():
+                lines.append(timing_row(sub_label, sub_ms, 4))
     lines += [
-        "-----------------------------------------------",
-        f"{'TOTAL':<24} {sum(timings.values()) / 1000:6.2f} s",
-        "=========================================",
+        "  " + "-" * (_REPORT_WIDTH - 2),
+        f"  {'TOTAL':<38}{total_s:7.2f}{'100%':>7}",
+        "=" * _REPORT_WIDTH,
     ]
 
     print("\n".join(lines))
@@ -266,14 +353,14 @@ def process_crowd_detection(data: dict):
         }
 
     with _timed("aggregation", timings, verbose=False):
-    aggregated_result = aggregate_stadium_data(
-        crowd_data=payload,
-        fire_data=fire_result,
-        stampede_data=stampede_result,
-        stadium_id=data.get("stadium_id", "STADIUM_01"),
-    )
+        aggregated_result = aggregate_stadium_data(
+            crowd_data=payload,
+            fire_data=fire_result,
+            stampede_data=stampede_result,
+            stadium_id=data.get("stadium_id", "STADIUM_01"),
+        )
 
-    _print_benchmark_report(detection_result, timings)
+    _print_benchmark_report(detection_result, timings, fire_result, stampede_result)
     payload["stage_timings_ms"] = timings
 
     return payload
