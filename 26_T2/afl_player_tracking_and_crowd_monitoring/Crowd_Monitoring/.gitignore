@@ -73,3 +73,4 @@ video_processing/data/extracted_frames/*.jpg
 # But allow the folder structure (the .gitkeep files)
 !data/raw/.gitkeep
 !video_processing/data/extracted_frames/.gitkeep
+!crowd_detection/yolo26mcrowdpeoplefaces.pt
