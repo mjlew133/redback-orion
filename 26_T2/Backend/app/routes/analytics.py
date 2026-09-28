@@ -133,6 +133,8 @@ def _player_summary(
     formations = (player_result.get("formation") or {}).get("formations") or []
 
     tackles = (player_result.get("tackle") or {}).get("tackles") or []
+    movement = player_result.get("movement") or {}
+    movement_metrics = movement.get("movement_metrics") or {}
 
     return {
         "video": video_info,
@@ -169,7 +171,19 @@ def _player_summary(
             "count": len(tackles),
             "data": tackles,
         },
-    }
+        "movement": {
+            "metric_mode": (
+                movement.get("metric_mode")
+                or movement_metrics.get("metric_mode")
+                ),
+                "calibration_available": (
+                    movement.get("calibration_available")
+                    if movement.get("calibration_available") is not None
+                    else movement_metrics.get("calibration_available")
+                    ),
+                    "exported_tracks": movement_metrics.get("exported_tracks"),
+                    },
+                }
 
 
 def _crowd_summary(

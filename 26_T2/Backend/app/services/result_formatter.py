@@ -75,7 +75,19 @@ def player_with_urls(
     tracking = result.get("tracking")
 
     if tracking:
-        tracking["video_url"] = _player_url(tracking.get("video_url"))
+        tracking["video_url"] = _player_url(
+            tracking.get("video_url")
+        )
+
+    movement = result.get("movement")
+
+    if movement:
+        movement["video_url"] = _player_url(
+            movement.get("video_url")
+        )
+        movement["metrics_csv_url"] = _player_url(
+            movement.get("metrics_csv_url")
+        )
 
     for section_name in (
         "jersey_color",
@@ -88,15 +100,18 @@ def player_with_urls(
                 "video_url",
                 "csv_url",
             ):
-                section[key] = _player_url(section.get(key))
+                section[key] = _player_url(
+                    section.get(key)
+                )
 
     tackle = result.get("tackle")
 
     if tackle:
-        tackle["csv_url"] = _player_url(tackle.get("csv_url"))
+        tackle["csv_url"] = _player_url(
+            tackle.get("csv_url")
+        )
 
     return result
-
 
 def format_player_tracking(
     tracking: dict | None,
