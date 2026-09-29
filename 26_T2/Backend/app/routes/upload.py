@@ -6,6 +6,7 @@ import tempfile
 import uuid
 import logging
 import traceback
+import cv2
 
 from datetime import (
     datetime,
@@ -70,6 +71,33 @@ ALLOWED_MIME_TYPES = {
     "video/quicktime",
 }
 
+
+def get_video_metadata(file_path: str) -> dict:
+    """Extract resolution, frame rate and duration from a video."""
+
+    video = cv2.VideoCapture(file_path)
+
+    if not video.isOpened():
+        raise ValueError("Unable to read uploaded video")
+
+    try:
+        width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = float(video.get(cv2.CAP_PROP_FPS))
+        frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        duration = frame_count / fps if fps > 0 else 0
+
+        return {
+            "width": width,
+            "height": height,
+            "resolution": f"{width}x{height}",
+            "fps": fps,
+            "duration": duration,
+        }
+
+    finally:
+        video.release()
 
 def tracking_to_csv(
     tracking_results: list,
@@ -388,6 +416,14 @@ async def upload_video(
         ) as destination:
 
             destination.write(contents)
+
+        video_metadata = get_video_metadata(file_path)
+
+        print("========== VIDEO INFORMATION ==========")
+        print(f"Resolution: {video_metadata['resolution']}")
+        print(f"Frame rate: {video_metadata['fps']:.2f} FPS")
+        print(f"Duration: {video_metadata['duration']:.2f} seconds")
+        print("=======================================")
 
         job = Job(
             user_id=uuid.UUID(current_user["sub"]),

@@ -1,6 +1,8 @@
 from app.main import app
 from datetime import datetime, timezone
 from app.auth.dependencies import get_current_user
+from app.routes.upload import get_video_metadata
+import cv2
 
 
 def override_get_current_user():
@@ -100,3 +102,34 @@ def test_upload_invalid_mime_type(client):
 
     assert response.status_code == 400
     assert "Invalid video format" in response.json()["detail"]
+
+
+def test_get_video_metadata(monkeypatch):
+    class FakeVideo:
+        def isOpened(self):
+            return True
+
+        def get(self, property_id):
+            values = {
+                cv2.CAP_PROP_FRAME_WIDTH: 1920,
+                cv2.CAP_PROP_FRAME_HEIGHT: 1080,
+                cv2.CAP_PROP_FPS: 30,
+                cv2.CAP_PROP_FRAME_COUNT: 300,
+            }
+            return values.get(property_id, 0)
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(
+        "app.routes.upload.cv2.VideoCapture",
+        lambda file_path: FakeVideo(),
+    )
+
+    metadata = get_video_metadata("test.mp4")
+
+    assert metadata["width"] == 1920
+    assert metadata["height"] == 1080
+    assert metadata["resolution"] == "1920x1080"
+    assert metadata["fps"] == 30
+    assert metadata["duration"] == 10
