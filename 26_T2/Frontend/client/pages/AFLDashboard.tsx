@@ -84,7 +84,7 @@ import {
 import MobileNavigation from "@/components/MobileNavigation";
 import { getCurrentUser, logout } from "@/lib/auth";
 
-const BACKEND_URL = "http://localhost:8000";
+import { BACKEND_URL } from "../lib/config";
 
 type BackendStatusResponse = {
   job_id: string;
@@ -98,59 +98,67 @@ type BackendStatusResponse = {
 };
 
 const getAccessToken = () =>
-  localStorage.getItem("accessToken") || localStorage.getItem("authToken");
+  localStorage.getItem("accessToken") ||
+  localStorage.getItem("access_token") ||
+  localStorage.getItem("authToken");
 
-// Mock data for the dashboard
-const mockPlayers = [
-  {
-    id: 1,
-    name: "Marcus Bontempelli",
-    team: "Western Bulldogs",
-    position: "Midfielder",
-    kicks: 28,
-    handballs: 12,
-    marks: 8,
-    tackles: 6,
-    goals: 2,
-    efficiency: 87,
-  },
-  {
-    id: 2,
-    name: "Dustin Martin",
-    team: "Richmond",
-    position: "Forward",
-    kicks: 22,
-    handballs: 8,
-    marks: 6,
-    tackles: 4,
-    goals: 3,
-    efficiency: 82,
-  },
-  {
-    id: 3,
-    name: "Patrick Dangerfield",
-    team: "Geelong",
-    position: "Midfielder",
-    kicks: 25,
-    handballs: 15,
-    marks: 7,
-    tackles: 8,
-    goals: 1,
-    efficiency: 84,
-  },
-  {
-    id: 4,
-    name: "Max Gawn",
-    team: "Melbourne",
-    position: "Ruckman",
-    kicks: 18,
-    handballs: 6,
-    marks: 10,
-    tackles: 3,
-    goals: 1,
-    efficiency: 78,
-  },
-];
+type DashboardPlayer = {
+  id: number;
+  name: string;
+  team: string;
+  position: string;
+  number: number;
+  fieldX: number;
+  fieldY: number;
+  kicks: number;
+  handballs: number;
+  marks: number;
+  tackles: number;
+  goals: number;
+  efficiency: number;
+};
+
+const getFieldPositionForRole = (position: string) => {
+  const role = position.trim().toLowerCase();
+
+  if (role.includes("forward")) {
+    return { fieldX: 50, fieldY: 24 };
+  }
+
+  if (role.includes("defender") || role.includes("back")) {
+    return { fieldX: 50, fieldY: 76 };
+  }
+
+  if (role.includes("ruck")) {
+    return { fieldX: 50, fieldY: 50 };
+  }
+
+  if (role.includes("mid") || role.includes("wing")) {
+    return { fieldX: 50, fieldY: 50 };
+  }
+
+  return { fieldX: 50, fieldY: 50 };
+};
+
+const normalizeDatabasePlayer = (player: any): DashboardPlayer => {
+  const fieldPosition = getFieldPositionForRole(player.position || "");
+
+  return {
+    id: Number(player.id),
+    name: player.name || "",
+    team: player.team || "",
+    position: player.position || "",
+    number: Number(player.jersey_number ?? player.jerseyNumber ?? 0),
+    fieldX: fieldPosition.fieldX,
+    fieldY: fieldPosition.fieldY,
+    kicks: Number(player.kicks ?? 0),
+    handballs: Number(player.handballs ?? 0),
+    marks: Number(player.marks ?? 0),
+    tackles: Number(player.tackles ?? 0),
+    goals: Number(player.goals ?? 0),
+    efficiency: Number(player.efficiency ?? 0),
+  };
+};
 
 const matchEvents = [
   {
@@ -243,13 +251,66 @@ const BackToTopButton = () => {
 };
 export default function AFLDashboard() {
   const navigate = useNavigate();
-  const [selectedPlayer, setSelectedPlayer] = useState(mockPlayers[0]);
-  const [comparisonPlayer, setComparisonPlayer] = useState(mockPlayers[1]);
+  const [players, setPlayers] = useState<DashboardPlayer[]>([]);
+  const [selectedPlayer, setSelectedPlayer] = useState<DashboardPlayer | null>(null);
+  const [comparisonPlayer, setComparisonPlayer] = useState<DashboardPlayer | null>(null);
+  const [playersLoading, setPlayersLoading] = useState(true);
+  const [playersError, setPlayersError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [isLive, setIsLive] = useState(true);
   const [userEmail, setUserEmail] = useState("");
   const [activeQueueItemId, setActiveQueueItemId] = useState<string | null>(null);
+
+  const loadDatabasePlayers = async () => {
+    setPlayersLoading(true);
+    setPlayersError(null);
+
+    try {
+      const token = getAccessToken();
+
+      const response = await fetch(`${BACKEND_URL}/api/players`, {
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const data = await response.json().catch(() => []);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ||
+            data?.message ||
+            `Unable to load players (${response.status})`,
+        );
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error("Player API returned an unexpected response.");
+      }
+
+      const databasePlayers = data.map(normalizeDatabasePlayer);
+
+      setPlayers(databasePlayers);
+      setSelectedPlayer(databasePlayers[0] ?? null);
+      setComparisonPlayer(databasePlayers[1] ?? databasePlayers[0] ?? null);
+    } catch (error) {
+      console.error("Failed to load database players:", error);
+      setPlayers([]);
+      setSelectedPlayer(null);
+      setComparisonPlayer(null);
+      setPlayersError(
+        error instanceof Error ? error.message : "Unable to load players.",
+      );
+    } finally {
+      setPlayersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDatabasePlayers();
+  }, []);
 
   // Feature flag to disable live match features
   const ENABLE_LIVE_FEATURES = false;
@@ -1560,11 +1621,21 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
     downloadText(clipsData, `AFL_Video_Clips_${Date.now()}`);
   };
 
-  const filteredPlayers = mockPlayers.filter(
+  const filteredPlayers = players.filter(
     (player) =>
       player.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
       (selectedTeam === "all" || player.team === selectedTeam),
   );
+
+  // Field display is intentionally search-driven:
+  // no player marker is shown until the user searches for a player.
+  const normalizedPlayerSearch = searchTerm.trim().toLowerCase();
+
+  const searchedFieldPlayers = normalizedPlayerSearch
+    ? players.filter((player) =>
+        player.name.toLowerCase().includes(normalizedPlayerSearch),
+      )
+    : [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50">
@@ -1600,7 +1671,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                     Welcome, {userEmail}
                   </span>
                 )}
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={() => navigate("/settings")}>
                   <Settings className="w-4 h-4 mr-2" />
                   Settings
                 </Button>
@@ -1645,6 +1716,32 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
 
           {/* Player Performance Tracker */}
           <TabsContent value="performance" className="space-y-6">
+            {playersLoading ? (
+              <Card>
+                <CardContent className="py-10 text-center text-gray-600">
+                  Loading players...
+                </CardContent>
+              </Card>
+            ) : playersError ? (
+              <Card>
+                <CardContent className="py-10 text-center">
+                  <p className="text-red-600">{playersError}</p>
+                  <Button
+                    variant="outline"
+                    className="mt-4"
+                    onClick={() => void loadDatabasePlayers()}
+                  >
+                    Try Again
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : players.length === 0 ? (
+              <Card>
+                <CardContent className="py-10 text-center text-gray-600">
+                  No players are currently available.
+                </CardContent>
+              </Card>
+            ) : selectedPlayer && comparisonPlayer ? (
             <div className="flex flex-col lg:flex-row gap-6">
               {/* Search and Filters */}
               <Card className="lg:w-1/3">
@@ -1679,12 +1776,15 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Teams</SelectItem>
-                        <SelectItem value="Western Bulldogs">
-                          Western Bulldogs
-                        </SelectItem>
-                        <SelectItem value="Richmond">Richmond</SelectItem>
-                        <SelectItem value="Geelong">Geelong</SelectItem>
-                        <SelectItem value="Melbourne">Melbourne</SelectItem>
+                        {Array.from(
+                          new Set(players.map((player) => player.team).filter(Boolean)),
+                        )
+                          .sort()
+                          .map((team) => (
+                            <SelectItem key={team} value={team}>
+                              {team}
+                            </SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1715,6 +1815,157 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
 
               {/* Player Statistics */}
               <div className="lg:w-2/3 space-y-6">
+                {/* Live AFL Field Position */}
+                <Card className="overflow-hidden">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <MapPin className="h-5 w-5 text-green-600" />
+                          Player Field Position
+                        </CardTitle>
+                        <CardDescription className="mt-1">
+                          Search for a player to view their primary playing
+                          position on the field.
+                        </CardDescription>
+                      </div>
+
+                      {normalizedPlayerSearch &&
+                        searchedFieldPlayers.length > 0 && (
+                          <Badge
+                            variant="outline"
+                            className="w-fit border-green-200 bg-green-50 text-green-700"
+                          >
+                            {searchedFieldPlayers.length === 1
+                              ? `Showing: ${searchedFieldPlayers[0].name}`
+                              : `${searchedFieldPlayers.length} matching players`}
+                          </Badge>
+                        )}
+                    </div>
+                  </CardHeader>
+
+                  <CardContent>
+                    <div className="relative mx-auto aspect-[1.55/1] w-full max-w-4xl overflow-hidden rounded-[46%] border-[5px] border-green-800 bg-gradient-to-b from-green-500 via-green-600 to-green-700 shadow-inner">
+                      {/* Alternating grass stripes */}
+                      <div className="absolute inset-0 grid grid-cols-10 opacity-30">
+                        {Array.from({ length: 10 }).map((_, index) => (
+                          <div
+                            key={index}
+                            className={
+                              index % 2 === 0
+                                ? "bg-white/10"
+                                : "bg-black/5"
+                            }
+                          />
+                        ))}
+                      </div>
+
+                      {/* Boundary line */}
+                      <div className="absolute inset-[3%] rounded-[46%] border-2 border-white/90" />
+
+                      {/* Centre square */}
+                      <div className="absolute left-1/2 top-1/2 h-[31%] w-[26%] -translate-x-1/2 -translate-y-1/2 border-2 border-white/90" />
+
+                      {/* Centre circle */}
+                      <div className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/90 sm:h-14 sm:w-14 lg:h-16 lg:w-16" />
+
+                      {/* 50 metre arcs */}
+                      <div className="absolute left-1/2 top-[4%] h-[32%] w-[58%] -translate-x-1/2 rounded-b-[50%] border-b-2 border-l-2 border-r-2 border-white/90" />
+                      <div className="absolute bottom-[4%] left-1/2 h-[32%] w-[58%] -translate-x-1/2 rounded-t-[50%] border-l-2 border-r-2 border-t-2 border-white/90" />
+
+                      {/* Goal squares */}
+                      <div className="absolute left-1/2 top-[3%] h-[13%] w-[20%] -translate-x-1/2 border-2 border-t-0 border-white/90" />
+                      <div className="absolute bottom-[3%] left-1/2 h-[13%] w-[20%] -translate-x-1/2 border-2 border-b-0 border-white/90" />
+
+                      {/* Top goal posts */}
+                      <div className="absolute left-1/2 top-0 flex -translate-x-1/2 gap-2 sm:gap-3">
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                      </div>
+
+                      {/* Bottom goal posts */}
+                      <div className="absolute bottom-0 left-1/2 flex -translate-x-1/2 items-end gap-2 sm:gap-3">
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-7 w-0.5 bg-white sm:h-9 sm:w-1" />
+                        <div className="h-5 w-0.5 bg-white sm:h-7 sm:w-1" />
+                      </div>
+
+                      {/* No search yet */}
+                      {!normalizedPlayerSearch && (
+                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+                          <div className="rounded-lg bg-black/55 px-4 py-2 text-center text-xs font-medium text-white shadow-lg backdrop-blur-sm sm:text-sm">
+                            Search for a player to view their field position
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Search did not match any player */}
+                      {normalizedPlayerSearch &&
+                        searchedFieldPlayers.length === 0 && (
+                          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+                            <div className="rounded-lg bg-black/55 px-4 py-2 text-center text-xs font-medium text-white shadow-lg backdrop-blur-sm sm:text-sm">
+                              No matching player found
+                            </div>
+                          </div>
+                        )}
+
+                      {/* Only searched players are rendered on the field */}
+                      {normalizedPlayerSearch &&
+                        searchedFieldPlayers.map((player) => (
+                          <div
+                            key={player.id}
+                            className="absolute z-20 -translate-x-1/2 -translate-y-1/2"
+                            style={{
+                              left: `${player.fieldX}%`,
+                              top: `${player.fieldY}%`,
+                            }}
+                          >
+                            {/* Animated outer glow */}
+                            <div className="absolute left-1/2 top-1/2 h-14 w-14 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full bg-yellow-300/60 sm:h-16 sm:w-16" />
+
+                            {/* Soft glow */}
+                            <div className="absolute left-1/2 top-1/2 h-14 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full bg-yellow-300/40 blur-md sm:h-16 sm:w-16" />
+
+                            {/* Player marker */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPlayer(player)}
+                              title={`${player.name} - ${player.team} - ${player.position}`}
+                              className="relative flex h-9 w-9 scale-125 items-center justify-center rounded-full border-2 border-yellow-200 bg-yellow-400 text-xs font-bold text-gray-950 shadow-lg ring-4 ring-yellow-300/40 transition-all duration-300 hover:scale-[1.35] sm:h-10 sm:w-10 lg:h-11 lg:w-11"
+                            >
+                              {player.number}
+                            </button>
+
+                            {/* Player name */}
+                            <div className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-yellow-400 px-2 py-1 text-[10px] font-semibold text-gray-950 shadow-md sm:text-xs">
+                              {player.name}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-4 text-xs sm:text-sm">
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <span className="h-3 w-3 rounded-full bg-yellow-400" />
+                        Searched Player
+                      </div>
+
+                      {normalizedPlayerSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setSearchTerm("")}
+                          className="font-medium text-green-700 transition-colors hover:text-green-800 hover:underline"
+                        >
+                          Clear field highlight
+                        </button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center justify-between">
@@ -1797,7 +2048,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                       <Select
                         value={comparisonPlayer.name}
                         onValueChange={(name) => {
-                          const player = mockPlayers.find(
+                          const player = players.find(
                             (p) => p.name === name,
                           );
                           if (player) setComparisonPlayer(player);
@@ -1807,7 +2058,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                           <SelectValue placeholder="Select player to compare" />
                         </SelectTrigger>
                         <SelectContent>
-                          {mockPlayers
+                          {players
                             .filter((p) => p.id !== selectedPlayer.id)
                             .map((player) => (
                               <SelectItem key={player.id} value={player.name}>
@@ -1852,6 +2103,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                                         comparisonPlayer[
                                           stat as keyof typeof comparisonPlayer
                                         ] as number,
+                                        1,
                                       )) *
                                     100
                                   }
@@ -1874,6 +2126,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                                         comparisonPlayer[
                                           stat as keyof typeof comparisonPlayer
                                         ] as number,
+                                        1,
                                       )) *
                                     100
                                   }
@@ -1892,6 +2145,7 @@ Export ID: ${Date.now()}-${Math.random().toString(36).substr(2, 9)}
                 </Card>
               </div>
             </div>
+            ) : null}
           </TabsContent>
 
           {/* Current Match Insights */}

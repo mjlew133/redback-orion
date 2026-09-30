@@ -15,6 +15,12 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     outDir: "dist/spa",
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        microsoftRedirect: path.resolve(__dirname, "redirect.html"),
+      },
+    },
   },
   plugins: [react(), expressPlugin()],
   resolve: {

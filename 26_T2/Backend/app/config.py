@@ -21,3 +21,9 @@ JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", 60))
 
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+# Microsoft OAuth / Entra ID
+MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "")
+MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "common")
+MICROSOFT_AUTHORITY = os.getenv("MICROSOFT_AUTHORITY", f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}")
+MICROSOFT_OPENID_CONFIG_URL = os.getenv("MICROSOFT_OPENID_CONFIG_URL", f"{MICROSOFT_AUTHORITY}/v2.0/.well-known/openid-configuration")
+MICROSOFT_JWKS_URL = os.getenv("MICROSOFT_JWKS_URL", "https://login.microsoftonline.com/common/discovery/v2.0/keys")

@@ -4,7 +4,7 @@ export interface OAuthUser {
   email: string;
   name: string;
   picture?: string;
-  provider: "google" | "apple";
+  provider: "google" | "apple" | "microsoft";
 }
 
 export interface GoogleOAuthConfig {
@@ -18,6 +18,12 @@ export interface AppleOAuthConfig {
   teamId: string;
   keyId: string;
   privateKey: string;
+  redirectUri: string;
+}
+
+export interface MicrosoftOAuthConfig {
+  clientId: string;
+  tenantId?: string;
   redirectUri: string;
 }
 
@@ -38,5 +44,8 @@ export const OAUTH_ENDPOINTS = {
   apple: {
     auth: "/api/auth/apple",
     callback: "/api/auth/apple/callback",
+  },
+  microsoft: {
+    auth: "/auth/microsoft",
   },
 } as const;

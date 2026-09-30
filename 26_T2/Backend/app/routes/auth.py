@@ -1,4 +1,9 @@
 from datetime import datetime, timezone
+import secrets
+
+import jwt as pyjwt
+from jwt import PyJWKClient
+from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -40,10 +45,103 @@ from app.auth.jwt import (
     decode_refresh_token,
 )
 from app.auth.dependencies import get_current_user
-from app.config import JWT_EXPIRE_MINUTES
+from app.config import (
+    JWT_EXPIRE_MINUTES,
+    MICROSOFT_CLIENT_ID,
+    MICROSOFT_JWKS_URL,
+)
 
 
 router = APIRouter()
+
+
+class MicrosoftAuthRequest(BaseModel):
+    id_token: str
+
+
+def _verify_microsoft_id_token(id_token: str) -> dict:
+    """Verify a Microsoft Entra ID / Microsoft account v2.0 ID token."""
+
+    if not MICROSOFT_CLIENT_ID:
+        raise HTTPException(
+            status_code=500,
+            detail="MICROSOFT_CLIENT_ID is not configured",
+        )
+
+    try:
+        # Read the tenant ID only to determine the expected issuer.
+        # Authentication decisions are made after signature validation below.
+        unverified_claims = pyjwt.decode(
+            id_token,
+            options={
+                "verify_signature": False,
+                "verify_aud": False,
+                "verify_iss": False,
+            },
+        )
+
+        tenant_id = unverified_claims.get("tid")
+
+        if not tenant_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Microsoft token does not contain a tenant ID",
+            )
+
+        expected_issuer = (
+            f"https://login.microsoftonline.com/{tenant_id}/v2.0"
+        )
+
+        jwks_client = PyJWKClient(
+            MICROSOFT_JWKS_URL,
+            cache_keys=True,
+        )
+
+        signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+
+        return pyjwt.decode(
+            id_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=MICROSOFT_CLIENT_ID,
+            issuer=expected_issuer,
+            options={
+                "require": ["exp", "iat", "aud", "iss", "sub"],
+            },
+        )
+
+    except HTTPException:
+        raise
+
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=401,
+            detail="Microsoft ID token has expired",
+        )
+
+    except pyjwt.InvalidAudienceError:
+        raise HTTPException(
+            status_code=401,
+            detail="Microsoft ID token has an invalid audience",
+        )
+
+    except pyjwt.InvalidIssuerError:
+        raise HTTPException(
+            status_code=401,
+            detail="Microsoft ID token has an invalid issuer",
+        )
+
+    except pyjwt.PyJWTError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Microsoft ID token",
+        )
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Unable to verify Microsoft ID token",
+        )
 
 
 def _issue_tokens(user: User, db: Session) -> dict:
@@ -74,6 +172,71 @@ def _issue_tokens(user: User, db: Session) -> dict:
         "user": user,
     }
 
+
+
+@router.post("/microsoft", response_model=AuthResponse)
+async def microsoft_login(
+    body: MicrosoftAuthRequest,
+    db: Session = Depends(get_db),
+):
+    """Authenticate using a Microsoft ID token from the frontend."""
+
+    if not body.id_token.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Microsoft ID token is required",
+        )
+
+    claims = _verify_microsoft_id_token(body.id_token.strip())
+
+    email = (
+        claims.get("email")
+        or claims.get("preferred_username")
+        or claims.get("upn")
+    )
+
+    if not email:
+        raise HTTPException(
+            status_code=401,
+            detail="Microsoft account did not return an email address",
+        )
+
+    email = str(email).strip().lower()
+
+    display_name = claims.get("name") or email.split("@")[0]
+
+    db_user = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    if not db_user:
+        base_username = str(display_name).strip() or email.split("@")[0]
+        username = base_username
+        counter = 1
+
+        while (
+            db.query(User)
+            .filter(User.username == username)
+            .first()
+        ):
+            username = f"{base_username}_{counter}"
+            counter += 1
+
+        oauth_password = secrets.token_urlsafe(48)
+
+        db_user = User(
+            email=email,
+            username=username,
+            password=hash_password(oauth_password),
+        )
+
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+
+    return _issue_tokens(db_user, db)
 
 @router.post("/register", response_model=AuthResponse)
 def register(

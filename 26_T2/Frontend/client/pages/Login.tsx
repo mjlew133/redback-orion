@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useMsal } from "@azure/msal-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -41,6 +42,8 @@ import {
 import { useNavigate } from "react-router-dom";
 import { saveAuthSession, getRole } from "@/lib/auth";
 import { apiRequest } from "@/lib/api";
+import { BACKEND_URL } from "@/lib/config";
+import { microsoftLoginRequest } from "@/lib/microsoftAuth";
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem("accessToken");
@@ -49,6 +52,7 @@ export const getAuthHeaders = () => {
 
 export default function Login() {
   const navigate = useNavigate();
+  const { instance } = useMsal();
   const [showPassword, setShowPassword] = useState(false);
   const [loginForm, setLoginForm] = useState({
     email: "",
@@ -93,7 +97,7 @@ export default function Login() {
     }
 
   try {
-    const data = await apiRequest("http://localhost:8000/auth/login", {
+    const data = await apiRequest(`${BACKEND_URL}/auth/login`, {
       method: "POST",
       body: JSON.stringify({
         email: loginForm.email,
@@ -141,7 +145,7 @@ export default function Login() {
     }
 
   try {
-    const data = await apiRequest("http://localhost:8000/auth/register", {
+    const data = await apiRequest(`${BACKEND_URL}/auth/register`, {
       method: "POST",
       body: JSON.stringify({
         username: `${signupForm.firstName}${signupForm.lastName}`.toLowerCase(),
@@ -189,6 +193,56 @@ export default function Login() {
     window.location.href = "/api/auth/apple";
   };
 
+  const handleMicrosoftAuth = async () => {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const microsoftResult = await instance.loginPopup(
+        microsoftLoginRequest,
+      );
+
+      if (!microsoftResult.idToken) {
+        throw new Error("Microsoft did not return an ID token.");
+      }
+
+      const data = await apiRequest(`${BACKEND_URL}/auth/microsoft`, {
+        method: "POST",
+        body: JSON.stringify({
+          id_token: microsoftResult.idToken,
+        }),
+      });
+
+      if (!data.access_token || !data.user) {
+        throw new Error(
+          "The server returned an incomplete Microsoft authentication response.",
+        );
+      }
+
+      saveAuthSession(data);
+      localStorage.setItem("authProvider", "microsoft");
+
+      navigate(
+        data.user.role === "admin" ? "/admin" : "/player-performance",
+        { replace: true },
+      );
+    } catch (err: any) {
+      console.error("Microsoft login failed:", err);
+
+      if (err?.errorCode === "user_cancelled") {
+        setError("");
+        return;
+      }
+
+      setError(
+        err?.message ||
+          "Unable to sign in with Microsoft. Please try again.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Handle OAuth callback from URL parameters
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -234,7 +288,7 @@ export default function Login() {
     setError("");
 
     try {
-      await apiRequest("http://localhost:8000/auth/forgot-password", {
+      await apiRequest(`${BACKEND_URL}/auth/forgot-password`, {
         method: "POST",
         body: JSON.stringify({ email: resetForm.email }),
       });
@@ -386,6 +440,39 @@ export default function Login() {
 
                       
 
+                      <div className="space-y-4">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full relative"
+                          onClick={handleMicrosoftAuth}
+                          disabled={isLoading}
+                        >
+                          <svg
+                            className="w-4 h-4 mr-2"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                          >
+                            <rect x="2" y="2" width="9" height="9" fill="#F25022" />
+                            <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
+                            <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
+                            <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
+                          </svg>
+                          Continue with Microsoft
+                        </Button>
+
+                        <div className="relative">
+                          <div className="absolute inset-0 flex items-center">
+                            <span className="w-full border-t" />
+                          </div>
+                          <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-background px-2 text-muted-foreground">
+                              Or continue with email
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
                       <form onSubmit={handleLogin} className="space-y-4">
                         <div className="space-y-2">
                           <Label htmlFor="email">Email Address</Label>
@@ -490,6 +577,39 @@ export default function Login() {
                       )}
 
                     
+
+                      <div className="space-y-4">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full relative"
+                          onClick={handleMicrosoftAuth}
+                          disabled={isLoading}
+                        >
+                          <svg
+                            className="w-4 h-4 mr-2"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                          >
+                            <rect x="2" y="2" width="9" height="9" fill="#F25022" />
+                            <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
+                            <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
+                            <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
+                          </svg>
+                          Sign up with Microsoft
+                        </Button>
+
+                        <div className="relative">
+                          <div className="absolute inset-0 flex items-center">
+                            <span className="w-full border-t" />
+                          </div>
+                          <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-background px-2 text-muted-foreground">
+                              Or sign up with email
+                            </span>
+                          </div>
+                        </div>
+                      </div>
 
                       <form onSubmit={handleSignup} className="space-y-4">
                         <div className="grid grid-cols-2 gap-3">
