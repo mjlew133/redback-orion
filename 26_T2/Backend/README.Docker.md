@@ -13,7 +13,7 @@ Docker Desktop must be running before using Docker commands.
 
 ## Services
 
-The Docker environment can include:
+The Docker environment includes:
 
 - Backend API
 - Frontend
@@ -28,6 +28,7 @@ Backend API:       8000
 Frontend:          8080
 PostgreSQL:        5432
 Crowd Monitoring:  8002
+Player Service:    8081 (host) / 8080 (container)
 ```
 
 Other service ports may depend on the current project configuration.

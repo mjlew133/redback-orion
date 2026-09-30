@@ -706,6 +706,119 @@ const url = `http://localhost:8000/jobs/${jobId}/heatmap`;
 
 ---
 
+### 6. Analysis & Result APIs
+
+The result APIs use `job_id` so the frontend can retrieve results for a specific uploaded video.
+
+All endpoints in this section require authentication.
+
+---
+
+#### `GET /analysis/{job_id}`
+
+Returns the detailed Player Tracking and Crowd Monitoring results for a specific job.
+
+The job must have a status of `done` or `partial`.
+
+**Response `200`:**
+```json
+{
+  "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "done",
+  "created_at": "2026-09-20T10:00:00Z",
+  "updated_at": "2026-09-20T10:05:00Z",
+  "player": {},
+  "crowd": {},
+  "error": null
+}
+```
+**Error responses:**
+```json
+// 404
+{
+  "detail": "Job not found"
+}
+// 409
+{
+  "detail": "Analysis is not complete"
+}
+```
+
+---
+
+#### `GET /analytics/{job_id}`
+
+Returns summarised analytics for a specific processing job.
+
+The response contains summary information generated from the stored Player Tracking and Crowd Monitoring results.
+
+Player Tracking analytics can include information such as:
+
+- Video information
+- Frames with tracking
+- Unique player IDs
+- Total player detections
+- Average players per frame
+- Peak players in a frame
+- Average confidence
+- Team detection counts
+- Formation information
+- Tackle information
+
+Crowd analytics can include crowd summary information, peak person count, crowd state, density information and risk information when available.
+
+---
+
+#### `GET /player-tracking/{job_id}`
+
+Returns the formatted Player Tracking result associated with a specific processing job.
+
+The `job_id` ensures that the Player Tracking result belongs to the selected uploaded video.
+
+---
+
+#### `GET /crowd/{job_id}`
+
+Returns the Crowd Monitoring result associated with a specific processing job.
+
+The response contains the Crowd Monitoring information stored for the requested job.
+
+---
+
+### 7. Direct Processing APIs
+
+#### `POST /players`
+
+Sends an uploaded video to the Player Tracking service for processing.
+
+#### `POST /crowd`
+
+Sends an uploaded video to the Crowd Monitoring service for processing.
+
+---
+
+## Job-Based Result Flow
+
+The frontend keeps the `job_id` returned when a video is uploaded and uses the same ID when requesting the processing status or results.
+
+```text
+POST /upload
+      |
+      v
+   job_id
+      |
+      +------> GET /status/{job_id}
+      |
+      +------> GET /analysis/{job_id}
+      |
+      +------> GET /analytics/{job_id}
+      |
+      +------> GET /player-tracking/{job_id}
+      |
+      +------> GET /crowd/{job_id}
+```
+
+
 ## CORS
 
 All three services are configured to accept requests from `http://localhost:3000`. No proxy configuration needed.
