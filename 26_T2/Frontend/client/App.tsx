@@ -21,6 +21,8 @@ import About from "./pages/About";
 import NotFound from "./pages/NotFound";
 import AddPlayer from "./pages/AddPlayer";
 import Admin from "./pages/Admin";
+import Profile from "./pages/Profile";
+import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -162,6 +164,24 @@ export default function App() {
               />
 
               <Route
+                path="/profile"
+                element={
+                  <ProtectedRoute allowedRoles={["user", "admin", "player", "coach"]}>
+                    <Profile />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/settings"
+                element={
+                  <ProtectedRoute allowedRoles={["user", "admin", "player", "coach"]}>
+                    <Settings />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
                 path="/admin"
                 element={
                   <ProtectedRoute allowedRoles={["admin"]}>
@@ -173,7 +193,6 @@ export default function App() {
                 <Route path="/api-diagnostics" element={<ApiDiagnostics />} />
                 <Route path="/about" element={<About />} />
                 <Route path="/error-demo" element={<ErrorDemo />} />
-                <Route path="/add-player" element={<AddPlayer />} />
                 <Route path="/stitch" element={<Index />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />

@@ -4,12 +4,30 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from app.config import DATABASE_URL, DEBUG
 
 # Async engine — used only for lifespan table creation in main.py
-engine = create_async_engine(DATABASE_URL, echo=DEBUG)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=DEBUG,
+    pool_pre_ping=True,
+)
 
 # Sync engine — used by all routes and background tasks
-sync_engine = create_engine(DATABASE_URL.replace("+asyncpg", ""), echo=DEBUG)
+SYNC_DATABASE_URL = DATABASE_URL.replace(
+    "postgresql+asyncpg://",
+    "postgresql://",
+    1,
+)
 
-SessionLocal = sessionmaker(bind=sync_engine, class_=Session, expire_on_commit=False)
+sync_engine = create_engine(
+    SYNC_DATABASE_URL,
+    echo=DEBUG,
+    pool_pre_ping=True,
+)
+
+SessionLocal = sessionmaker(
+    bind=sync_engine,
+    class_=Session,
+    expire_on_commit=False,
+)
 
 Base = declarative_base()
 

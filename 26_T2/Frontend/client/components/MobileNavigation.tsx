@@ -14,6 +14,8 @@ import {
   Zap,
   Terminal,
   Shield,
+  User,
+  Settings,
 } from "lucide-react";
 
 // allowedRoles here must match App.tsx's ProtectedRoute allowedRoles for the
@@ -69,6 +71,13 @@ const navigationItems: {
     allowedRoles: ["admin"],
   },
   {
+    name: "Profile",
+    href: "/profile",
+    icon: User,
+    description: "Account & role settings",
+    allowedRoles: ["user", "admin", "player", "coach"],
+  },
+  {
     name: "About",
     href: "/about",
     icon: Zap,
@@ -99,6 +108,11 @@ export default function MobileNavigation() {
       return location.pathname === "/";
     }
     return location.pathname.startsWith(href);
+  };
+
+  const handleSettings = () => {
+    setIsOpen(false);
+    navigate("/settings");
   };
 
   return (
@@ -166,6 +180,18 @@ export default function MobileNavigation() {
                         </Link>
                       );
                     })}
+
+                    <button
+                      type="button"
+                      onClick={handleSettings}
+                      className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-gray-50"
+                    >
+                      <Settings className="h-5 w-5 shrink-0 text-gray-500" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-gray-700">Settings</div>
+                        <div className="text-xs text-gray-500">Application preferences</div>
+                      </div>
+                    </button>
                   </div>
                 </nav>
               </div>
@@ -230,6 +256,18 @@ export default function MobileNavigation() {
                   </Link>
                 );
               })}
+
+              <button
+                type="button"
+                onClick={handleSettings}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-gray-50"
+              >
+                <Settings className="h-5 w-5 shrink-0 text-gray-500" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-gray-700">Settings</div>
+                  <div className="text-xs text-gray-500">Application preferences</div>
+                </div>
+              </button>
             </div>
           </div>
         </div>

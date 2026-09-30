@@ -15,6 +15,7 @@ python-jose[cryptography]
 bcrypt
 passlib[bcrypt]
 email-validator
+PyJWT[crypto]
 
 # Utilities
 python-dotenv

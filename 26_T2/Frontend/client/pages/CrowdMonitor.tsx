@@ -165,11 +165,202 @@ const getDensityLabel = (density: number) => {
   return "Low";
 };
 
+function GeneratedCrowdHeatmap({
+  zones,
+}: {
+  zones: ReturnType<typeof generateCrowdData>;
+}) {
+  const averageDensity =
+    zones.reduce((sum, zone) => sum + zone.density, 0) / zones.length;
+
+  const intensity = Math.max(0.72, Math.min(1, averageDensity / 90));
+
+  const heatRegions = [
+    { x: 19, y: 31, w: 24, h: 22, rotate: -18, level: "cool" },
+    { x: 25, y: 20, w: 24, h: 18, rotate: -10, level: "warm" },
+    { x: 37, y: 14, w: 26, h: 17, rotate: -4, level: "hot" },
+    { x: 52, y: 12, w: 27, h: 17, rotate: 3, level: "warm" },
+    { x: 67, y: 17, w: 25, h: 18, rotate: 10, level: "hot" },
+    { x: 79, y: 29, w: 22, h: 22, rotate: 18, level: "warm" },
+
+    { x: 85, y: 44, w: 18, h: 27, rotate: 4, level: "hot" },
+    { x: 84, y: 60, w: 19, h: 27, rotate: -5, level: "critical" },
+
+    { x: 77, y: 74, w: 23, h: 21, rotate: -17, level: "warm" },
+    { x: 65, y: 83, w: 25, h: 18, rotate: -8, level: "hot" },
+    { x: 50, y: 87, w: 27, h: 17, rotate: 0, level: "warm" },
+    { x: 35, y: 84, w: 25, h: 18, rotate: 8, level: "critical" },
+    { x: 23, y: 75, w: 23, h: 21, rotate: 17, level: "hot" },
+
+    { x: 16, y: 61, w: 19, h: 27, rotate: 5, level: "warm" },
+    { x: 15, y: 45, w: 18, h: 27, rotate: -4, level: "hot" },
+
+    { x: 29, y: 27, w: 18, h: 15, rotate: -12, level: "critical" },
+    { x: 58, y: 19, w: 18, h: 14, rotate: 5, level: "critical" },
+    { x: 74, y: 39, w: 17, h: 18, rotate: 14, level: "hot" },
+    { x: 70, y: 70, w: 18, h: 17, rotate: -13, level: "critical" },
+    { x: 42, y: 79, w: 19, h: 15, rotate: 5, level: "hot" },
+    { x: 25, y: 58, w: 17, h: 19, rotate: -8, level: "critical" },
+  ] as const;
+
+  const thermalGradient = (level: string) => {
+    if (level === "critical") {
+      return `
+        radial-gradient(
+          ellipse at center,
+          rgba(220,38,38,0.98) 0%,
+          rgba(249,115,22,0.96) 20%,
+          rgba(250,204,21,0.86) 40%,
+          rgba(34,197,94,0.58) 58%,
+          rgba(6,182,212,0.38) 72%,
+          rgba(37,99,235,0.18) 84%,
+          transparent 100%
+        )
+      `;
+    }
+
+    if (level === "hot") {
+      return `
+        radial-gradient(
+          ellipse at center,
+          rgba(249,115,22,0.96) 0%,
+          rgba(250,204,21,0.88) 25%,
+          rgba(34,197,94,0.62) 48%,
+          rgba(6,182,212,0.40) 68%,
+          rgba(37,99,235,0.18) 84%,
+          transparent 100%
+        )
+      `;
+    }
+
+    if (level === "warm") {
+      return `
+        radial-gradient(
+          ellipse at center,
+          rgba(250,204,21,0.90) 0%,
+          rgba(34,197,94,0.68) 32%,
+          rgba(6,182,212,0.48) 58%,
+          rgba(37,99,235,0.22) 78%,
+          transparent 100%
+        )
+      `;
+    }
+
+    return `
+      radial-gradient(
+        ellipse at center,
+        rgba(6,182,212,0.72) 0%,
+        rgba(37,99,235,0.50) 45%,
+        rgba(29,78,216,0.18) 72%,
+        transparent 100%
+      )
+    `;
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-xl border bg-black shadow-sm">
+      {/* AFL stadium base image */}
+      <img
+        src="/images/afl-stadium-base.png"
+        alt="AFL stadium crowd heatmap visualisation"
+        className="block h-auto w-full select-none object-contain"
+        draggable={false}
+      />
+
+      {/* Slight darkening improves visibility of thermal colours */}
+      <div className="pointer-events-none absolute inset-0 bg-black/5" />
+
+      {/* Soft blue outer thermal area */}
+      <div
+        className="pointer-events-none absolute rounded-[50%]"
+        style={{
+          left: "7%",
+          right: "7%",
+          top: "7%",
+          bottom: "7%",
+          border: "22px solid rgba(37, 99, 235, 0.18)",
+          filter: "blur(16px)",
+          opacity: intensity,
+        }}
+      />
+
+      {/* Main continuous heat regions */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {heatRegions.map((region, index) => (
+          <div
+            key={`thermal-${index}`}
+            className="absolute rounded-full transition-opacity duration-1000"
+            style={{
+              left: `${region.x}%`,
+              top: `${region.y}%`,
+              width: `${region.w}%`,
+              height: `${region.h}%`,
+              transform: `translate(-50%, -50%) rotate(${region.rotate}deg)`,
+              background: thermalGradient(region.level),
+              filter: "blur(13px)",
+              opacity: intensity,
+              mixBlendMode: "screen",
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Secondary blending layer */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: `
+            radial-gradient(
+              ellipse at 24% 36%,
+              rgba(6,182,212,0.20) 0%,
+              transparent 20%
+            ),
+            radial-gradient(
+              ellipse at 42% 15%,
+              rgba(250,204,21,0.20) 0%,
+              transparent 18%
+            ),
+            radial-gradient(
+              ellipse at 72% 27%,
+              rgba(249,115,22,0.22) 0%,
+              transparent 18%
+            ),
+            radial-gradient(
+              ellipse at 82% 56%,
+              rgba(220,38,38,0.24) 0%,
+              transparent 17%
+            ),
+            radial-gradient(
+              ellipse at 65% 79%,
+              rgba(250,204,21,0.20) 0%,
+              transparent 18%
+            ),
+            radial-gradient(
+              ellipse at 31% 76%,
+              rgba(249,115,22,0.22) 0%,
+              transparent 18%
+            ),
+            radial-gradient(
+              ellipse at 17% 53%,
+              rgba(6,182,212,0.20) 0%,
+              transparent 18%
+            )
+          `,
+          filter: "blur(10px)",
+          opacity: intensity,
+          mixBlendMode: "screen",
+        }}
+      />
+    </div>
+  );
+}
+
 export default function CrowdMonitor() {
   const [isLive, setIsLive] = useState(true);
   const [crowdZones, setCrowdZones] = useState(generateCrowdData());
   const [selectedZone, setSelectedZone] = useState(crowdZones[0]);
   const [viewMode, setViewMode] = useState("heatmap");
+  const [heatmapDisplayMode, setHeatmapDisplayMode] = useState<"zones" | "image">("zones");
   const [timeRange, setTimeRange] = useState("live");
 
   // Simulate real-time crowd updates
@@ -325,6 +516,23 @@ export default function CrowdMonitor() {
             </TabsList>
 
             <TabsContent value="heatmap" className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={heatmapDisplayMode === "zones" ? "default" : "outline"}
+                  onClick={() => setHeatmapDisplayMode("zones")}
+                >
+                  Stadium Zone View
+                </Button>
+                <Button
+                  type="button"
+                  variant={heatmapDisplayMode === "image" ? "default" : "outline"}
+                  onClick={() => setHeatmapDisplayMode("image")}
+                >
+                  Heatmap Image View
+                </Button>
+              </div>
+
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -336,6 +544,8 @@ export default function CrowdMonitor() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
+                  {heatmapDisplayMode === "zones" ? (
+                    <>
                   {/* Stadium Heat Map */}
                   <div className="relative bg-green-100 rounded-lg p-4 min-h-80 overflow-hidden">
                     {/* Field */}
@@ -383,6 +593,11 @@ export default function CrowdMonitor() {
                       </button>
                     ))}
                   </div>
+
+                    </>
+                  ) : (
+                    <GeneratedCrowdHeatmap zones={crowdZones} />
+                  )}
 
                   {/* Legend */}
                   <div className="flex flex-wrap justify-center gap-4 mt-4 text-xs">

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { BACKEND_URL } from "@/lib/config";
 import {
   Select,
   SelectContent,
@@ -63,6 +64,7 @@ import {
   Settings,
   Eye,
   Star,
+  Heart,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { isAdmin } from "@/lib/auth";
@@ -302,6 +304,9 @@ export default function PlayerPerformance() {
   const ENABLE_LIVE_FEATURES = true;
 
   const [players, setPlayers] = useState<any[]>([]);
+  const [playersLoading, setPlayersLoading] = useState(true);
+  const [playersError, setPlayersError] = useState("");
+  const [deletingPlayerId, setDeletingPlayerId] = useState<number | null>(null);
   const [selectedPlayer, setSelectedPlayer] = useState<any>(null);
   const [comparisonPlayer, setComparisonPlayer] = useState(players[1]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -313,11 +318,33 @@ export default function PlayerPerformance() {
   const [selectedVideo, setSelectedVideo] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState("");
   const [jobs, setJobs] = useState<any[]>([]);
-  const token = localStorage.getItem("token");
+  const token =
+    localStorage.getItem("accessToken") ||
+    localStorage.getItem("access_token") ||
+    localStorage.getItem("authToken");
   const [jobStatus, setJobStatus] = useState("");
   const [jobId, setJobId] = useState("");
   const [jobError, setJobError] = useState("");
   const navigate = useNavigate();
+
+  const getFavouriteStorageKey = () => {
+    let email = localStorage.getItem("userEmail");
+
+    if (!email) {
+      try {
+        const storedUser = JSON.parse(localStorage.getItem("user") || "null");
+        email = storedUser?.email || null;
+      } catch {
+        email = null;
+      }
+    }
+
+    if (!email) return null;
+
+    return `favoritePlayers:${email.trim().toLowerCase()}`;
+  };
+
+  const [favoritePlayers, setFavoritePlayers] = useState<any[]>([]);
 
   // --- Bulk Excel upload state ---
   const [excelUploadStatus, setExcelUploadStatus] = useState("");
@@ -328,7 +355,7 @@ export default function PlayerPerformance() {
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch("http://localhost:8000/upload", {
+    const res = await fetch(`${BACKEND_URL}/upload`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -343,7 +370,7 @@ export default function PlayerPerformance() {
   };
 
   const fetchJobs = async () => {
-    const res = await fetch("http://localhost:8000/jobs?page=1&limit=10", {
+    const res = await fetch(`${BACKEND_URL}/jobs?page=1&limit=10`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -358,20 +385,6 @@ export default function PlayerPerformance() {
     if (!selectedVideo) {
       setUploadStatus("Please choose a video first");
       return;
-    }
-  };
-
-  const handleDeletePlayer = async (playerId: number) => {
-    try {
-      const res = await fetch(`http://localhost:8000/api/player/${playerId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Delete failed");
-      setPlayers((prev) => prev.filter((p) => p.id !== playerId));
-    } catch (err) {
-      console.error("Delete failed:", err);
-      ;
     }
 
     setUploadStatus("Uploading...");
@@ -392,6 +405,98 @@ export default function PlayerPerformance() {
     }
   };
 
+  const isFavoritePlayer = (playerId: number) => {
+    return favoritePlayers.some((favorite) => favorite.id === playerId);
+  };
+
+  const toggleFavoritePlayer = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    player: any,
+  ) => {
+    event.stopPropagation();
+
+    const favouriteKey = getFavouriteStorageKey();
+
+    if (!favouriteKey) {
+      console.error("Cannot save favourites: no logged-in user email found.");
+      return;
+    }
+
+    const alreadyFavorite = isFavoritePlayer(player.id);
+    const updatedFavorites = alreadyFavorite
+      ? favoritePlayers.filter((favorite) => favorite.id !== player.id)
+      : [...favoritePlayers, player];
+
+    setFavoritePlayers(updatedFavorites);
+    localStorage.setItem(favouriteKey, JSON.stringify(updatedFavorites));
+  };
+
+  const handleDeletePlayer = async (playerId: number) => {
+    const player = players.find((existingPlayer) => existingPlayer.id === playerId);
+    if (!player) return;
+
+    const confirmed = window.confirm(
+      `Delete ${player.name}? This will permanently remove the player from the database.`,
+    );
+
+    if (!confirmed) return;
+
+    setDeletingPlayerId(player.id);
+    setPlayersError("");
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/player/${player.id}`, {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ||
+            data?.message ||
+            `Failed to delete player (${response.status})`,
+        );
+      }
+
+      const remainingPlayers = players.filter(
+        (existingPlayer) => existingPlayer.id !== player.id,
+      );
+
+      setPlayers(remainingPlayers);
+
+      if (selectedPlayer?.id === player.id) {
+        setSelectedPlayer(remainingPlayers[0] ?? null);
+      }
+
+      if (comparisonPlayer?.id === player.id) {
+        setComparisonPlayer(remainingPlayers[0] ?? null);
+      }
+
+      const updatedFavorites = favoritePlayers.filter(
+        (favorite) => favorite.id !== player.id,
+      );
+
+      setFavoritePlayers(updatedFavorites);
+
+      const favouriteKey = getFavouriteStorageKey();
+      if (favouriteKey) {
+        localStorage.setItem(favouriteKey, JSON.stringify(updatedFavorites));
+      }
+    } catch (error) {
+      console.error("PLAYER DELETE ERROR:", error);
+      setPlayersError(
+        error instanceof Error ? error.message : "Unable to delete player.",
+      );
+    } finally {
+      setDeletingPlayerId(null);
+    }
+  };
+
   // --- Bulk Excel upload handler ---
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -404,7 +509,7 @@ export default function PlayerPerformance() {
     formData.append("file", file);
 
     try {
-      const res = await fetch("http://localhost:8000/api/players/upload-excel", {
+      const res = await fetch(`${BACKEND_URL}/api/players/upload-excel`, {
         method: "POST",
         body: formData,
       });
@@ -437,17 +542,45 @@ export default function PlayerPerformance() {
     }
   };
 
-  const fetchPlayers = () => {
-    fetch("http://localhost:8000/api/players")
-      .then((res) => res.json())
-      .then((data) => {
-        const playerList = Array.isArray(data) ? data.map(normalizePlayer) : [];
-        setPlayers(playerList.length > 0 ? playerList : generatePlayerData());
-      })
-      .catch((err) => {
-        console.error("API ERROR:", err);
-        setPlayers(generatePlayerData());
+  const fetchPlayers = async () => {
+    setPlayersLoading(true);
+    setPlayersError("");
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/players`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ||
+            data?.message ||
+            `Failed to fetch players (${response.status})`,
+        );
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid player response received from server.");
+      }
+
+      setPlayers(data.map(normalizePlayer));
+    } catch (error) {
+      console.error("PLAYER DATABASE ERROR:", error);
+      setPlayers([]);
+      setPlayersError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load players from database.",
+      );
+    } finally {
+      setPlayersLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -455,39 +588,113 @@ export default function PlayerPerformance() {
   }, []);
 
   useEffect(() => {
+    try {
+      const favouriteKey = getFavouriteStorageKey();
+
+      if (!favouriteKey) {
+        setFavoritePlayers([]);
+        return;
+      }
+
+      const storedFavorites = JSON.parse(
+        localStorage.getItem(favouriteKey) || "[]",
+      );
+
+      setFavoritePlayers(Array.isArray(storedFavorites) ? storedFavorites : []);
+    } catch (error) {
+      console.error("Failed to load favorite players:", error);
+      setFavoritePlayers([]);
+    }
+  }, []);
+
+  useEffect(() => {
     if (players.length > 0) {
-      setSelectedPlayer(players[0]);
-      setComparisonPlayer(players[1] || players[0]);
+      setSelectedPlayer((current: any) =>
+        players.find((player) => player.id === current?.id) || players[0],
+      );
+      setComparisonPlayer((current: any) =>
+        players.find((player) => player.id === current?.id) ||
+        players[1] ||
+        players[0],
+      );
+    } else {
+      setSelectedPlayer(null);
+      setComparisonPlayer(null);
     }
   }, [players]);
 
 
 
-  // Simulate live data updates
-  useEffect(() => {
-    if (!isLive || !isPlaying) return;
 
-    const interval = setInterval(() => {
-      setPlayers((prevPlayers) =>
-        prevPlayers.map((player) => ({
-          ...player,
-          stats: {
-            ...player.stats,
-            disposals: player.stats.disposals + Math.floor(Math.random() * 2),
-            efficiency: Math.max(
-              60,
-              Math.min(95, player.stats.efficiency + (Math.random() - 0.5) * 2),
-            ),
-          },
-        })),
-      );
-    }, 3000);
+  if (playersLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+        <MobileNavigation />
+        <div className="lg:ml-64 p-6">
+          <Card>
+            <CardContent className="p-8 text-center">
+              <RefreshCw className="mx-auto mb-4 h-6 w-6 animate-spin text-blue-600" />
+              <p className="font-medium">Loading players from database...</p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
-    return () => clearInterval(interval);
-  }, [isLive, isPlaying]);
+  if (playersError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+        <MobileNavigation />
+        <div className="lg:ml-64 p-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Unable to load players</CardTitle>
+              <CardDescription>
+                Player information could not be retrieved from the database.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-red-600">{playersError}</p>
+              <Button onClick={fetchPlayers}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Try Again
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
-  if (!selectedPlayer) {
-    return <div className="p-6">Loading player data...</div>;
+  if (players.length === 0 || !selectedPlayer) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+        <MobileNavigation />
+        <div className="lg:ml-64 p-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>No Players</CardTitle>
+              <CardDescription>
+                There are currently no players stored in the database.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex gap-3">
+              <Button
+                onClick={() => navigate("/add-player")}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                Add Player
+              </Button>
+              <Button variant="outline" onClick={fetchPlayers}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
   }
 
   const filteredPlayers = players.filter(
@@ -704,6 +911,27 @@ export default function PlayerPerformance() {
             <h3 className="font-bold text-sm leading-tight">{player.name}</h3>
             <p className="text-xs text-gray-600">{player.position}</p>
           </div>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            aria-label={
+              isFavoritePlayer(player.id)
+                ? `Remove ${player.name} from favourites`
+                : `Add ${player.name} to favourites`
+            }
+            onClick={(event) => toggleFavoritePlayer(event, player)}
+          >
+            <Heart
+              className={`h-5 w-5 ${
+                isFavoritePlayer(player.id)
+                  ? "fill-red-500 text-red-500"
+                  : "text-gray-500"
+              }`}
+            />
+          </Button>
         </div>
 
         <div className="grid grid-cols-3 gap-2 text-center text-xs">
@@ -728,12 +956,13 @@ export default function PlayerPerformance() {
           variant="ghost"
           size="sm"
           className="mt-3 w-full text-red-600 hover:bg-red-50"
+          disabled={deletingPlayerId === player.id}
           onClick={(e) => {
             e.stopPropagation();
             onDelete(player.id);
           }}
         >
-          Delete
+          {deletingPlayerId === player.id ? "Deleting..." : "Delete"}
         </Button>
         )}
       </CardContent>
