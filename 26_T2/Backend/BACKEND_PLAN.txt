@@ -1,13 +1,16 @@
 ========================================================
-  PROJECT ORION — BACKEND TEAM PLAN (Trimester 1, 2026)
-  SIT782 – Team Project (B) – Execution and Delivery
+  PROJECT ORION — BACKEND TEAM PLAN (Trimester 2, 2026)
 ========================================================
 
 TEAM ROLE
 ---------
-The backend team is responsible for building the API Gateway that connects
-the frontend to the player model service and crowd model service.
-We do NOT build the ML models — those are owned by the player and crowd teams.
+The backend team is responsible for building and maintaining the API Gateway
+that connects the frontend to the Player Tracking and Crowd Monitoring services.
+
+The backend does NOT build the ML models. These are owned by the Player and
+Crowd teams. The backend is responsible for integrating these services,
+managing processing jobs, storing results, handling authentication, and
+providing APIs that allow the frontend to access the results.
 
 
 ARCHITECTURE OVERVIEW
@@ -15,588 +18,642 @@ ARCHITECTURE OVERVIEW
 Frontend (React)
       |
       v
-Backend API Gateway (FastAPI) ← OUR RESPONSIBILITY
+Backend API Gateway (FastAPI)
       |
-      | asyncio.gather() — called IN PARALLEL
-      |
-  ----+----
-  |       |
-  v       v
-Player  Crowd
-Service Service
-(YOLO)  (Density)
+      +-------------------+
+      |                   |
+      v                   v
+Player Tracking       Crowd Monitoring
+Service               Service
+      |                   |
+      +---------+---------+
+                |
+                v
+        PostgreSQL Database
 
-During development, all services run locally on different ports and communicate over HTTP.
-Docker is added at the end (Phase 4) for final demo and submission only.
+The backend acts as the central communication layer between the frontend,
+processing services and database.
+
+Each uploaded video creates a unique job_id. Player Tracking and Crowd
+Monitoring results are stored against this job so that the frontend can
+retrieve results for the correct uploaded video.
+
+During development, services can run locally on separate ports and communicate
+over HTTP. Docker Compose is also available to run the project services
+together.
 
 
 SERVICES & PORTS
 ----------------
 Service             | Owner         | Local Dev URL               | Port
---------------------|---------------|-----------------------------|------
-Frontend            | Frontend team | http://localhost:3000       | 3000
+--------------------|---------------|-----------------------------|----------------
+Frontend            | Frontend team | Project configuration       | 8080
 Backend Gateway     | Backend team  | http://localhost:8000       | 8000
-Player Model        | Player team   | http://localhost:8001       | 8001
-Crowd Model         | Crowd team    | http://localhost:8002       | 8002
+Player Tracking     | Player team   | Service configuration       | 8081 host / 8080 container
+Crowd Monitoring    | Crowd team    | http://localhost:8002       | 8002
+PostgreSQL          | Backend team  | Database configuration      | 5432
 
-Note: Ports are placeholders until other teams confirm. All URLs will be
-configurable via environment variables — no hardcoding.
-During development each team runs their service locally with their own command.
-Docker URLs (http://player-service:8001 etc.) will be used only in Phase 4.
+Service URLs are configurable through environment variables rather than being
+hard-coded.
 
 
 API ENDPOINTS (Gateway)
 -----------------------
-Auth (public):
-  POST /auth/register     — create new user account
-  POST /auth/login        — returns JWT token
-  GET  /auth/me           — returns current logged-in user info (protected)
 
-Video Processing (protected — require JWT):
-  POST /upload                  — accepts video, fans out to player + crowd in parallel
-                                  Returns: { job_id: "abc123" }  ← immediate, non-blocking
+Auth:
+  POST /auth/register       — create a new user account
+  POST /auth/login          — authenticate user
+  POST /auth/refresh        — refresh authentication tokens
+  POST /auth/logout         — revoke refresh token and log out
+  GET  /auth/me             — return current logged-in user information
 
-  GET  /status/{job_id}        — frontend polls for job progress
-                                  Returns: { status: "processing" }
-                                        or: { status: "done", results: { player: {...}, crowd: {...} } }
-                                        or: { status: "partial", results: { player: {...}, crowd: null },
-                                              errors: { crowd: "crowd service failed" } }
-                                        or: { status: "failed", error: "..." }
+Video Processing:
+  POST /upload
+       — accepts a video and creates a processing job
+       — returns a unique job_id for tracking the uploaded video
 
-  GET  /jobs?page=1&limit=10   — returns paginated past jobs for the logged-in user
-                                  Returns: { total, page, limit, jobs: [ { job_id, status, created_at, results }, ... ] }
+Job Management:
+  GET  /status/{job_id}
+       — returns processing status and available job information
 
-  GET  /jobs/{job_id}          — returns full details of a single past job
-                                  Returns: { job_id, status, created_at, results: { player, crowd } }
+  GET  /jobs?page=1&limit=10
+       — returns paginated jobs available to the logged-in user
 
-  POST /jobs/{job_id}/retry    — re-runs only the failed service(s) for a partial job
-                                  Does NOT re-run successful services
-                                  Returns: { job_id, status: "processing" }
+  GET  /jobs/{job_id}
+       — returns full information for a specific job
 
-  DELETE /jobs/{job_id}        — delete a job and its results
-                                  User: own jobs only | Admin: any job
-                                  Returns: { message: "job deleted" }
+  POST /jobs/{job_id}/retry
+       — retries eligible failed processing
+
+  POST /jobs/{job_id}/recover
+       — supports recovery of interrupted or failed jobs
+
+  GET  /jobs/{job_id}/heatmap
+       — returns the Crowd Monitoring heatmap for a job
+
+  DELETE /jobs/{job_id}
+       — deletes a job and its results when the user has permission
+
+Processing Services:
+  POST /players
+       — sends video data to the Player Tracking service
+
+  POST /crowd
+       — sends video data to the Crowd Monitoring service
+
+Result APIs:
+  GET /analysis/{job_id}
+       — returns Analysis results for the requested job
+
+  GET /analytics/{job_id}
+       — returns summarised Player Tracking and Crowd Monitoring analytics
+         for the requested job
+
+  GET /player-tracking/{job_id}
+       — returns formatted Player Tracking results for the requested job
+
+  GET /crowd/{job_id}
+       — returns Crowd Monitoring results for the requested job
 
 System:
-  GET  /health           — checks if player + crowd services are reachable
-                           Returns: { gateway: "ok", player_service: "ok", crowd_service: "ok" }
+  GET /
+       — confirms that the backend is running
+
+  GET /health
+       — checks backend and processing-service health
+
+  GET /test
+       — basic backend API test
+
+Using job_id for the result APIs ensures that results belong to the selected
+uploaded video rather than relying on the latest processed job.
 
 
 TECH STACK
 ----------
-- Python 3.11+
-- FastAPI              — web framework
-- httpx               — async HTTP client (to call player/crowd services)
-- asyncio.gather()    — parallel calls to both model services
-- PostgreSQL          — stores users, job status and results (JSON)
-- SQLAlchemy          — Python ORM to interact with PostgreSQL
-- bcrypt              — password hashing
-- python-jose         — JWT token generation and validation
-- python-dotenv       — environment variable management
-- pydantic               — request/response schema validation (built into FastAPI)
-- pytest + pytest-asyncio — testing with mocked services
-- Docker + Docker Compose — containerisation (Phase 4 only, final demo/submission)
+- Python
+- FastAPI                 — backend web framework
+- httpx                   — HTTP communication with processing services
+- PostgreSQL              — stores users, jobs and processing results
+- SQLAlchemy              — database ORM
+- bcrypt                  — password hashing
+- python-jose / JWT       — authentication
+- python-dotenv           — environment configuration
+- Pydantic                — request and response validation
+- pytest                  — automated backend testing
+- Docker                  — containerisation
+- Docker Compose          — multi-service environment
 
 
 FOLDER STRUCTURE
 ----------------
-backend/
+Backend/
 ├── app/
-│   ├── main.py          — FastAPI app entry point, route registration
-│   ├── config.py        — loads service URLs and DB config from env vars
-│   ├── database.py      — PostgreSQL connection setup (SQLAlchemy)
-│   ├── models.py        — User + Job table definitions (SQLAlchemy ORM)
+│   ├── main.py
+│   │     — FastAPI application setup and route registration
+│   │
+│   ├── config.py
+│   │     — environment and backend configuration
+│   │
+│   ├── database.py
+│   │     — PostgreSQL connection setup
+│   │
+│   ├── models.py
+│   │     — database models
+│   │
 │   ├── routes/
-│   │   ├── auth.py      — POST /auth/register, /auth/login, GET /auth/me
-│   │   ├── upload.py    — POST /upload route (protected)
-│   │   ├── jobs.py      — GET /jobs, GET /jobs/{job_id}, GET /status/{job_id},
-│   │   │                   POST /jobs/{job_id}/retry (protected)
-│   │   └── health.py    — GET /health route
+│   │     — authentication, upload, jobs, Analysis, Analytics,
+│   │       Player Tracking and Crowd Monitoring routes
+│   │
 │   ├── services/
-│   │   ├── player_client.py   — async HTTP calls to player service
-│   │   └── crowd_client.py    — async HTTP calls to crowd service
+│   │   ├── player_client.py
+│   │   │     — communication with Player Tracking service
+│   │   ├── crowd_client.py
+│   │   │     — communication with Crowd Monitoring service
+│   │   └── result_formatter.py
+│   │         — formats processing results for backend APIs
+│   │
 │   ├── schemas/
-│   │   ├── auth.py      — Pydantic models for auth requests/responses
-│   │   ├── jobs.py      — Pydantic models for job requests/responses
-│   │   └── health.py    — Pydantic models for health response
+│   │     — Pydantic request and response schemas
+│   │
 │   └── auth/
-│       ├── hashing.py   — bcrypt password hashing
-│       └── jwt.py       — JWT token creation and validation
+│         — authentication and JWT functionality
+│
 ├── tests/
-│   ├── test_auth.py     — auth endpoint tests
-│   ├── test_upload.py   — upload + video validation tests
-│   ├── test_jobs.py     — jobs, pagination, retry tests
-│   └── test_health.py   — health check tests
-├── uploads/             — temporary video storage (Phase 1-3: local folder)
+│     — automated backend tests
+│
+├── uploads/
+│     — uploaded video storage
+│
 ├── requirements.txt
-├── .env                 — all environment variables
-└── Dockerfile           — added in Phase 4 only
-
-docker-compose.yml       — added in Phase 4 only, wires all 4 services + PostgreSQL together
+├── Dockerfile
+├── compose.yaml
+└── .env / .env.docker
 
 
 ENVIRONMENT VARIABLES (.env)
 -----------------------------
-# Local development
-PLAYER_SERVICE_URL=http://localhost:8001
-CROWD_SERVICE_URL=http://localhost:8002
-BACKEND_PORT=8000
-UPLOAD_DIR=uploads
+Backend configuration is provided through environment variables.
 
-# Mock Service Toggle
-# Set to true during development or when player/crowd services are not ready
-# Set to false to use real player and crowd services
-USE_MOCK_SERVICES=true
+Important configuration includes:
 
-# PostgreSQL
-DATABASE_URL=postgresql://user:password@localhost:5432/orion_db
+  PLAYER_SERVICE_URL
+  CROWD_SERVICE_URL
+  DATABASE_URL
+  UPLOAD_DIR
+  JWT_SECRET_KEY
+  JWT_ALGORITHM
+  JWT_EXPIRE_MINUTES
 
-# Auth
-JWT_SECRET_KEY=your-secret-key-here
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_MINUTES=60
+Mock service configuration was used during earlier development while the
+processing-service contracts were still being integrated.
 
-# Phase 4 (Docker) — swap these in when Dockerizing
-# PLAYER_SERVICE_URL=http://player-service:8001
-# CROWD_SERVICE_URL=http://crowd-service:8002
-# DATABASE_URL=postgresql://user:password@db:5432/orion_db
+As the semester progressed, mock/fallback processing responses were replaced
+with responses from the actual Player Tracking and Crowd Monitoring services.
+
+Docker uses internal service names and container ports for communication
+between services.
 
 
 STORAGE STRATEGY
 ----------------
-Phase 1-3 (Local Development):
-  - Uploaded video → saved to backend/uploads/ folder (deleted after processing)
-  - Job status + results → stored in PostgreSQL
-  - Player/crowd services read video via file path passed in the request
+Local Development:
+  - Uploaded videos are stored in the configured upload location.
+  - Job information and processing results are stored in PostgreSQL.
+  - Player Tracking and Crowd Monitoring results are associated with job_id.
 
-Phase 4 (Docker):
-  - Uploaded video → saved to a shared Docker volume (/uploads/)
-  - All services (gateway, player, crowd) mount the same volume
-  - No need to send video over HTTP — just pass the file path
-  - Job status + results → still in PostgreSQL (also runs in a container)
+Docker:
+  - Services use Docker volumes where shared file access is required.
+  - PostgreSQL provides persistent job and result storage.
+  - Docker service names are used for communication between containers.
+
+The job_id remains the main link between an uploaded video, its processing
+state and its results.
 
 
 DATABASE SCHEMA (PostgreSQL)
 -----------------------------
+
 Table: users
-  user_id      UUID        PRIMARY KEY
-  email        VARCHAR     UNIQUE, NOT NULL
-  username     VARCHAR     UNIQUE, NOT NULL
-  password     VARCHAR     hashed password (bcrypt)
-  role         VARCHAR     "admin" / "user"
-  created_at   TIMESTAMP   when account was created
+  user_id       UUID        PRIMARY KEY
+  email         VARCHAR     UNIQUE, NOT NULL
+  username      VARCHAR     UNIQUE, NOT NULL
+  password      VARCHAR     hashed password
+  role          VARCHAR     user role
+  created_at    TIMESTAMP   account creation time
 
 Table: jobs
-  job_id        UUID        PRIMARY KEY
-  user_id       UUID        FOREIGN KEY → users.user_id
-  status        VARCHAR     "processing" / "done" / "failed"
-  video_path    VARCHAR     path to uploaded video file
-  player_result JSONB       results from player service
-  crowd_result  JSONB       results from crowd service
-  error         VARCHAR     error message if failed
-  created_at    TIMESTAMP   when job was created
-  updated_at    TIMESTAMP   last updated
+  job_id          UUID        PRIMARY KEY
+  user_id         UUID        FOREIGN KEY → users.user_id
+  status          VARCHAR     current processing status
+  video_path      VARCHAR     uploaded video location
+  player_result   JSONB       Player Tracking result
+  crowd_result    JSONB       Crowd Monitoring result
+  error           VARCHAR     processing error information
+  retry_count     INTEGER     processing retry count
+  progress        INTEGER     processing progress
+  started_at      TIMESTAMP   processing start time
+  completed_at    TIMESTAMP   processing completion time
+  failure_reason  VARCHAR     processing failure information
+  created_at      TIMESTAMP   job creation time
+  updated_at      TIMESTAMP   last update time
+
+Table: refresh_tokens
+  - stores refresh-token information associated with users
+  - supports authentication token renewal and logout/revocation
+
+Player Tracking and Crowd Monitoring results are stored against the same job,
+allowing result APIs to retrieve information using job_id.
 
 
 AUTHENTICATION
 --------------
-- Users register and log in via the gateway
-- Passwords are hashed with bcrypt (never stored in plain text)
-- On login, gateway issues a JWT token
-- All protected endpoints require the JWT token in the request header
-- JWT token contains: user_id, email, role, expiry
+- Users can register and log in through the backend.
+- Passwords are hashed rather than stored as plain text.
+- Authentication uses access and refresh tokens.
+- Protected endpoints require a valid access token.
+- Refresh tokens allow users to obtain a new authentication token pair.
+- Logout revokes the refresh token.
+- User roles are used for access control.
 
 Auth Endpoints:
-  POST /auth/register  — create new user account
-  POST /auth/login     — returns JWT token
-  GET  /auth/me        — returns current logged-in user info
-
-Protected Endpoints (require JWT):
-  POST /upload                 — any logged-in user
-  GET  /status/{job_id}       — own jobs (user) / all jobs (admin)
-  GET  /jobs?page=1&limit=10  — own jobs (user) / all jobs (admin)
-  GET  /jobs/{job_id}         — own jobs (user) / any job (admin)
-  POST /jobs/{job_id}/retry   — own jobs (user) / any job (admin)
-  DELETE /jobs/{job_id}       — own jobs (user) / any job (admin)
-  GET  /health                — admin only
-
-Tech used for Auth:
-  - bcrypt (python-bcrypt)   — password hashing
-  - JWT (python-jose)        — token generation and validation
+  POST /auth/register
+  POST /auth/login
+  POST /auth/refresh
+  POST /auth/logout
+  GET  /auth/me
 
 
 PYDANTIC SCHEMAS (Request/Response Models)
 ------------------------------------------
-These define exactly what data each endpoint accepts and returns.
-FastAPI validates all requests/responses against these automatically.
+Pydantic schemas define and validate the information accepted and returned by
+the backend APIs.
+
+Schemas cover areas including:
 
 Auth:
-  RegisterRequest:   { email, username, password }
-  LoginRequest:      { email, password }
-  AuthResponse:      { access_token, token_type: "bearer" }
-  UserResponse:      { user_id, email, username, role, created_at }
+  - registration
+  - login
+  - token responses
+  - user information
 
 Upload:
-  UploadResponse:    { job_id, status: "processing", created_at }
+  - upload responses
+  - job_id and processing status
 
 Jobs:
-  JobSummary:        { job_id, status, created_at, updated_at }
-  JobDetail:         { job_id, status, created_at, updated_at,
-                       results: { player, crowd }, errors: { player, crowd } }
-  JobListResponse:   { total, page, limit, jobs: [ JobSummary ] }
+  - job summary
+  - job details
+  - progress and processing information
+  - retry/recovery information
+
+Results:
+  - Analysis results
+  - Analytics results
+  - Player Tracking results
+  - Crowd Monitoring results
 
 Health:
-  HealthResponse:    { gateway, player_service, crowd_service }
-
-Note: schemas/ folder will be added to the folder structure:
-  app/schemas/
-    ├── auth.py    — auth request/response schemas
-    ├── jobs.py    — job request/response schemas
-    └── health.py  — health response schema
+  - backend and service-health information
 
 
 TESTING STRATEGY
 ----------------
-We test the gateway WITHOUT needing the player or crowd services to be running.
-We use mock responses to simulate what those services would return.
+Testing is used throughout backend development rather than only at the end of
+the project.
 
-Tools:
-  - pytest         — test runner
-  - httpx          — async test client for FastAPI
-  - pytest-asyncio — async test support
+Testing covers:
 
-Test structure:
-  backend/
-  └── tests/
-      ├── test_auth.py     — register, login, token validation
-      ├── test_upload.py   — file upload, format validation, job creation
-      ├── test_jobs.py     — job status, job list, pagination, retry
-      └── test_health.py   — health check
+  - authentication
+  - video upload
+  - video validation
+  - job creation
+  - job status and progress
+  - Player Tracking integration
+  - Crowd Monitoring integration
+  - Analysis API
+  - Analytics API
+  - retry behaviour
+  - recovery behaviour
+  - failure and timeout handling
+  - job lifecycle and management
 
-What we mock:
-  - Player service response → return fake player metrics JSON
-  - Crowd service response  → return fake crowd metrics JSON
-  - This lets us test the full gateway logic without running ML models
+Mock processing services were useful during the earlier development stages
+when the ML services were not fully integrated.
 
-When to run tests:
-  - Phase 1: test auth endpoints
-  - Phase 2: test upload, jobs, retry with mocked services
-  - Phase 3: remove mocks, test against real services
+After integration, testing was also performed using the actual processing
+services.
+
+End-to-end testing was carried out for the Upload and Analytics APIs, and
+automated testing was expanded for upload validation and job-management
+functionality.
 
 
 IMPLEMENTATION PHASES
 ---------------------
 
-PHASE 1 — Foundation (Week 1-2)
-  - Set up folder structure (including schemas/ and tests/)
-  - Implement config.py (env var loading including USE_MOCK_SERVICES flag)
-  - Configure CORS (allow frontend on localhost:3000)
-  - Set up PostgreSQL locally and create users + jobs tables
-  - Implement database.py and models.py (SQLAlchemy)
-  - Define Pydantic schemas for auth and health (schemas/auth.py, schemas/health.py)
-  - Implement auth module (hashing.py + jwt.py)
-  - Implement RBAC dependencies (get_current_user, require_admin)
-  - Implement POST /auth/register and POST /auth/login
-  - Implement GET /health endpoint
-  - Create uploads/ folder for temporary video storage
-  - Write tests for auth endpoints (tests/test_auth.py)
-  - Run gateway locally: uvicorn app.main:app --port 8000
-  - Test gateway starts correctly and connects to PostgreSQL
-  - Share API contract (BACKEND_PLAN.txt + /docs) with frontend team
-  - Send contract template to player and crowd teams and request confirmation
+PHASE 1 — Foundation
+  [x] Set up backend folder structure
+  [x] Configure FastAPI
+  [x] Configure environment variables
+  [x] Configure CORS
+  [x] Set up PostgreSQL
+  [x] Implement SQLAlchemy database models
+  [x] Define initial Pydantic schemas
+  [x] Implement authentication
+  [x] Implement role-based access control
+  [x] Implement health checking
+  [x] Establish automated backend tests
+  [x] Share backend API contract with the wider project team
 
-PHASE 2 — Core Gateway Logic (Week 3-4)
-  - Define Pydantic schemas for jobs (schemas/jobs.py)
-  - Implement httpx async clients (player_client.py, crowd_client.py)
-  - Both clients must respect USE_MOCK_SERVICES flag:
-      → USE_MOCK_SERVICES=true  → return hardcoded mock JSON (default)
-      → USE_MOCK_SERVICES=false → call real player/crowd service endpoints
-  - Implement POST /upload:
-      → validate video format (.mp4, .avi, .mov) and MIME type
-      → save video to uploads/ folder
-      → create job in PostgreSQL (status: processing)
-      → add background task (process_video) and return job_id immediately
-      Background task (process_video):
-        → check USE_MOCK_SERVICES flag to decide which client to use
-        → call player + crowd services in parallel (asyncio.gather)
-        → handle partial results if one service fails
-        → update job in PostgreSQL with results (status: done/partial/failed)
-        → delete video from uploads/ folder
-  - Implement GET /status/{job_id} → reads from PostgreSQL
-  - Implement GET /jobs?page&limit → paginated job list (filtered by user role)
-  - Implement GET /jobs/{job_id} → full details of a single job (RBAC enforced)
-  - Implement POST /jobs/{job_id}/retry → re-runs only failed service(s) (RBAC enforced)
-  - Implement DELETE /jobs/{job_id} → delete job (RBAC enforced)
-  - Write tests with mocked player + crowd service responses
-  - Test all endpoints with mocked services
-  - Frontend integration checkpoint: verify /health and /auth/login reachable from frontend
 
-PHASE 3 — Integration (Week 5-6)
-  - Finalise confirmed contracts with player and crowd teams
-  - Make integration decision: proceed with real services or stay on mocks
-  - If contracts confirmed: update player_client.py and crowd_client.py for real services
-  - Keep USE_MOCK_SERVICES flag — do NOT delete mock logic
-  - Each team runs their service locally on their agreed port
-  - End-to-end test: frontend → gateway → both services → results back
-  - Handle errors (service down, timeout, bad video format)
-  - Prepare two demo modes:
-      Mode A (preferred): USE_MOCK_SERVICES=false — real player + crowd services
-      Mode B (fallback):  USE_MOCK_SERVICES=true  — mock responses, full flow still works
+PHASE 2 — Core Gateway Logic
+  [x] Implement Player and Crowd service clients
+  [x] Implement video Upload API
+  [x] Implement video validation
+  [x] Create processing jobs
+  [x] Implement job status retrieval
+  [x] Implement job history
+  [x] Implement individual job retrieval
+  [x] Implement retry handling
+  [x] Implement job deletion
+  [x] Implement processing error handling
+  [x] Test core gateway functionality
 
-PHASE 4 — Buffer + Dockerize & Polish (Week 7-8)
-  - Week 7 is a buffer week — use it to resolve any outstanding integration issues
-  - If integration is on track, proceed with Docker setup:
-      → Write Dockerfile for the gateway
-      → Write docker-compose.yml wiring all 4 services + PostgreSQL container
-      → Add shared Docker volume for uploads/ folder
-      → Swap .env URLs from localhost to Docker service names
-  - Logging (request/response logs for debugging)
-  - API documentation (FastAPI auto-generates Swagger UI at /docs)
-  - README with setup and run instructions (both local and Docker)
-  - Final demo: attempt Mode A first, fall back to Mode B if real services not stable
+
+PHASE 3 — Service Integration
+  [x] Confirm Crowd Monitoring integration
+  [x] Integrate real Crowd Monitoring responses
+  [x] Confirm Player Tracking integration
+  [x] Integrate real Player Tracking responses
+  [x] Replace processing mock/fallback responses with ML-service responses
+  [x] Add Player Tracking API
+  [x] Add Crowd Monitoring API
+  [x] Add Analysis API
+  [x] Fix Analysis API integration issue
+  [x] Add Analytics API
+  [x] Add result_formatter helper functionality
+  [x] Work with aggregated Crowd Monitoring JSON results
+  [x] Perform end-to-end Upload and Analytics API testing
+  [x] Resolve integration issues involving Player and Crowd services
+
+
+PHASE 4 — Reliability, Validation & Job Management
+  [x] Add service timeout handling
+  [x] Add video upload-size validation
+  [x] Add chunked file reading
+  [x] Add MP4, AVI and MOV header validation
+  [x] Add job progress tracking
+  [x] Improve job processing and tracking information
+  [x] Improve backend failure handling
+  [x] Add component-level retry handling
+  [x] Add job-health and stuck-job detection
+  [x] Add backend job recovery functionality
+  [x] Improve job lifecycle and recovery processing
+  [x] Expand automated upload and job-manager testing
+
+
+PHASE 5 — Final Integration & Documentation
+  [x] Convert result retrieval to job-specific APIs
+  [x] Use job_id for Analysis results
+  [x] Use job_id for Analytics results
+  [x] Use job_id for Player Tracking results
+  [x] Use job_id for Crowd Monitoring results
+  [x] Complete backend/frontend integration work
+  [x] Dockerise backend environment
+  [x] Configure Docker Compose
+  [x] Verify Swagger API documentation
+  [x] Update backend README documentation
+  [x] Update API contract
+  [x] Update architecture documentation
+  [x] Update database documentation
+  [x] Update Docker documentation
 
 
 ROLE-BASED ACCESS CONTROL (RBAC)
 ---------------------------------
-Two roles: "user" (default) and "admin"
+The backend uses roles to control access to protected functionality.
 
-Permissions:
-  Endpoint                        | User              | Admin
-  --------------------------------|-------------------|------------------
-  POST /auth/register             | Yes               | Yes
-  POST /auth/login                | Yes               | Yes
-  GET  /auth/me                   | Yes (own)         | Yes
-  POST /upload                    | Yes               | Yes
-  GET  /status/{job_id}           | Own jobs only     | All jobs
-  GET  /jobs                      | Own jobs only     | All users' jobs
-  GET  /jobs/{job_id}             | Own jobs only     | Any job
-  POST /jobs/{job_id}/retry       | Own jobs only     | Any job
-  DELETE /jobs/{job_id}           | Own jobs only     | Any job
-  GET  /health                    | No                | Yes
+Authentication and authorisation logic determines whether the current user can
+access the requested resource.
 
-Implementation:
-  - Role is stored in the users table (role: "user" / "admin")
-  - Role is included in the JWT token payload
-  - Two FastAPI dependencies:
-      get_current_user   — any logged-in user
-      require_admin      — admin only (returns 403 if not admin)
-  - Default role on register: "user"
-  - Admin accounts created manually in the database
+Job ownership is also checked so that users cannot access another user's
+processing jobs unless their role provides the required permission.
 
-New endpoint added:
-  DELETE /jobs/{job_id}  — delete a job and its results
-                           User can delete own jobs only
-                           Admin can delete any job
+Role information is stored with the user and is used by backend authentication
+dependencies when protected routes are accessed.
 
 
 BACKGROUND PROCESSING
 ---------------------
-Video processing takes a long time (1-5 minutes). The gateway must NOT block
-while waiting for player and crowd services to respond.
+Video processing can take significantly longer than a normal API request, so
+the backend manages processing through jobs.
 
-How it works:
-  1. POST /upload is called
-  2. Gateway saves video to uploads/ folder
-  3. Gateway creates job in PostgreSQL (status: "processing")
-  4. Gateway returns { job_id } IMMEDIATELY — does not wait
-  5. Background task starts:
-       → calls player + crowd services in parallel (asyncio.gather)
-       → handles partial results if one service fails
-       → updates job in PostgreSQL (status: "done" / "partial" / "failed")
-  6. Frontend polls GET /status/{job_id} until status is no longer "processing"
+General processing flow:
 
-Implementation:
-  - Uses FastAPI built-in BackgroundTasks (no extra tools needed)
-  - No message queue required for this project scope
+  1. POST /upload receives the video.
+  2. Backend validates the uploaded video.
+  3. A new job is created in PostgreSQL.
+  4. A unique job_id is returned.
+  5. Player Tracking and Crowd Monitoring processing takes place.
+  6. Job status and progress are updated.
+  7. Results are stored against the job.
+  8. The frontend checks processing status using job_id.
+  9. Completed results can be retrieved using the job-specific result APIs.
 
-  Example:
-    @app.post("/upload")
-    async def upload(file, background_tasks: BackgroundTasks):
-        job_id = create_job_in_db()
-        background_tasks.add_task(process_video, job_id, file_path)
-        return { "job_id": job_id }  ← returns instantly
-
-  process_video() runs in the background:
-    → calls player + crowd in parallel
-    → updates PostgreSQL when done
+This prevents the frontend from having to wait for the complete ML processing
+operation before receiving a response from the initial upload request.
 
 
 ERROR HANDLING STRATEGY
 -----------------------
-When one service fails and the other succeeds:
-  - Job status is set to "partial" (not "failed")
-  - Successful results are saved and returned to the frontend
-  - Failed service is recorded in the errors field
-  - Frontend shows available results + a Retry button
+The backend handles processing failures at both service and job level.
 
-When user clicks Retry:
-  - POST /jobs/{job_id}/retry is called
-  - Gateway re-runs ONLY the failed service (not the successful one)
-  - Video file path is retrieved from the job record in PostgreSQL
-  - Job status updated to "processing" then "done" or "partial" again
+The implementation includes:
 
-Job status values:
-  "processing" — job is currently running
-  "done"       — both services completed successfully
-  "partial"    — one service succeeded, one failed (retry available)
-  "failed"     — both services failed
+  - Player Tracking and Crowd Monitoring timeout handling
+  - processing failure information
+  - partial-result handling
+  - retry handling
+  - job recovery
+  - job-health checking
+  - stuck-job detection
+  - upload validation
+  - video-format validation
 
-Video file size limit:
-  - To be confirmed with player and crowd teams
-  - Will be set as a config value in .env (MAX_UPLOAD_SIZE)
+Successful processing results are preserved where possible rather than being
+discarded because another part of processing failed.
 
-Video format validation:
-  - Only accepted formats: .mp4, .avi, .mov
-  - Gateway checks the file extension AND MIME type before processing
-  - If invalid format → return 400 Bad Request immediately (do not call model services)
-  - Accepted MIME types: video/mp4, video/x-msvideo, video/quicktime
+Failure information is stored with the job so that it can be reported to the
+frontend and used by retry or recovery functionality.
 
 
 WHAT WE ARE NOT BUILDING
 -------------------------
-- The player tracking ML model (YOLOv11 + DeepSORT) — Player team
-- The crowd density ML model — Crowd team
-- The React frontend UI — Frontend team
+- The Player Tracking ML model — Player team responsibility
+- The Crowd Monitoring ML model — Crowd team responsibility
+- The frontend UI — Frontend team responsibility
+
+The backend integrates these components but does not own their internal model
+or frontend implementations.
 
 
 CONTRACT DEFINITIONS
 --------------------
 
-CONTRACT 1 — Backend Gateway → Frontend Team (what we provide)
-  Our full API is defined in this plan (see API ENDPOINTS section).
-  FastAPI auto-generates interactive docs at: http://localhost:8000/docs
-  Frontend team should refer to /docs for the full spec.
+CONTRACT 1 — Backend Gateway → Frontend
+  The backend exposes authenticated APIs for uploads, jobs, Analysis,
+  Analytics, Player Tracking and Crowd Monitoring.
 
-CONTRACT 2 — Backend Gateway → Player Team (what we send them)
-  We will call:
-    POST http://localhost:8001/analyze   (port TBC)
+  FastAPI interactive documentation:
+    http://localhost:8000/docs
 
-  Request (multipart/form-data):
-    file_path: string   — path to the uploaded video file
-
-  Expected Response (JSON):  ← TO BE CONFIRMED BY PLAYER TEAM
-    {
-      "players": [
-        {
-          "player_id": <int>,
-          "position": { "x": <float>, "y": <float> },
-          "speed": <float>,
-          "distance_covered": <float>,
-          "sprints": <int>
-        }
-      ],
-      "heatmap": "<base64_encoded_image or file_path>"
-    }
-
-CONTRACT 3 — Backend Gateway → Crowd Team (what we send them)
-  We will call:
-    POST http://localhost:8002/analyze   (port TBC)
-
-  Request (multipart/form-data):
-    file_path: string   — path to the uploaded video file
-
-  Expected Response (JSON):  ← TO BE CONFIRMED BY CROWD TEAM
-    {
-      "crowd_count": <int>,
-      "density": <float>,
-      "movement": "<string>",
-      "sections": [
-        {
-          "section_id": <int>,
-          "count": <int>,
-          "density": <float>
-        }
-      ]
-    }
-
-NOTE: All contracts marked "TBC" will be updated once other teams confirm.
-      No hardcoding of response fields until contracts are finalised.
+  The frontend stores the job_id returned from an upload and uses this ID when
+  checking processing status and retrieving results.
 
 
-========================================================
-  Prepared by: Backend Team — Project Orion
-  Date: 2026-03-24
-========================================================
+CONTRACT 2 — Backend Gateway → Player Tracking Service
+  The Player Tracking integration uses the confirmed Player service rather
+  than the earlier placeholder/mock-only contract.
+
+  The backend sends the required video for Player Tracking processing.
+
+  The returned Player Tracking information is stored in player_result against
+  the corresponding job.
+
+  result_formatter is used where required to convert the processing result
+  into the structure exposed through the backend API.
+
+
+CONTRACT 3 — Backend Gateway → Crowd Monitoring Service
+  The Crowd Monitoring integration uses the confirmed Crowd service.
+
+  Crowd processing endpoint:
+    POST /process-crowd-detection
+
+  The backend provides the video information required by the Crowd service.
+
+  Crowd results can include:
+    - summary
+    - peak crowd information
+    - heatmap
+    - anomaly information
+    - time-series information
+    - density information
+
+  The returned Crowd result is stored in crowd_result against the corresponding
+  job.
 
 
 ========================================================
   PROGRESS TRACKER
-  Last Updated: 2026-04-29
+  Last Updated: 2026-10-01
 ========================================================
 
-OVERALL STATUS: Phase 3 In Progress — Crowd integrated (real), Player still on mock
+OVERALL STATUS:
+Core backend implementation and ML-service integration completed, with
+job-specific result retrieval, reliability improvements, testing, Docker
+support and documentation updates completed.
+
 
 PHASE 1 — Foundation
-  [x] Set up folder structure (including schemas/ and tests/)
-  [x] Implement basic routes (/, /health, /api/players, /api/crowd, /api/test)
-  [x] Share API contract (BACKEND_PLAN.txt) with team
-  [x] Implement config.py (env var loading including USE_MOCK_SERVICES flag)
-  [x] Configure CORS (allow frontend on localhost:3000)
-  [x] Set up PostgreSQL locally and create users + jobs tables
-  [x] Implement database.py and models.py (SQLAlchemy — async/asyncpg driver)
-  [x] Define Pydantic schemas for auth and health
-  [x] Implement auth module (hashing.py + jwt.py)
-  [x] Implement RBAC dependencies (get_current_user, require_admin)
-  [x] Implement POST /auth/register and POST /auth/login
-  [x] Create uploads/ folder for temporary video storage
-  [x] Write tests for auth endpoints (tests/test_auth.py)
-  [x] Run gateway locally: uvicorn app.main:app --port 8000
-  [x] Share /docs URL with frontend team
-  [x] Send contract template to player and crowd teams
+  [x] Backend structure established
+  [x] PostgreSQL configured
+  [x] Authentication implemented
+  [x] RBAC implemented
+  [x] Core schemas created
+  [x] Initial automated testing established
 
-PHASE 2 — Core Gateway Logic
-  [x] Define Pydantic schemas for jobs (schemas/jobs.py)
-  [x] Implement player_client.py and crowd_client.py with USE_MOCK_SERVICES toggle
-  [x] Implement POST /upload with background task
-  [x] Implement GET /status/{job_id}
-  [x] Implement GET /jobs (paginated)
-  [x] Implement GET /jobs/{job_id}
-  [x] Implement POST /jobs/{job_id}/retry
-  [x] Implement DELETE /jobs/{job_id}
-  [x] Write tests with mocked services
-  [x] Frontend checkpoint: verify /health and /auth/login reachable from frontend
 
-PHASE 3 — Integration
-  [x] Finalise contracts with crowd team
-       → Endpoint: POST /process-crowd-detection (port 8002)
-       → Request:  JSON { video_id, video_path } (absolute path)
-       → Response: summary, peak_crowd_frame, heatmap, anomaly_visual, time_series_chart, density_extremes
-  [x] Update crowd_client.py for real service (mock flag retained)
-  [x] Heatmap proxy added: GET /jobs/{job_id}/heatmap — streams image from crowd service
-  [ ] Finalise contracts with player team (still on mock — USE_MOCK_PLAYER=true)
-  [ ] Update player_client.py for real service (keep mock flag)
-  [ ] End-to-end testing: frontend → gateway → both services → results back
-  [ ] Error handling polish for service failures
-  [ ] Verify demo Mode A (real services) and Mode B (mock fallback) both work
+PHASE 2 — Core Gateway
+  [x] Upload processing
+  [x] Job creation
+  [x] Job status
+  [x] Job history
+  [x] Retry handling
+  [x] Job deletion
+  [x] Player and Crowd service clients
 
-PHASE 4 — Buffer + Dockerize & Polish
-  [ ] Buffer week: resolve any outstanding integration issues
-  [ ] Write Dockerfile for gateway
-  [ ] Write docker-compose.yml
-  [ ] Add shared Docker volume for uploads/
-  [ ] Swap .env URLs for Docker
-  [ ] Add logging
-  [ ] Verify Swagger docs at /docs
-  [ ] Write README
-  [ ] Final demo run with frontend team
+
+PHASE 3 — ML Service Integration
+  [x] Crowd Monitoring integrated
+  [x] Player Tracking integrated
+  [x] Mock/fallback processing replaced with real ML-service responses
+  [x] Player Tracking API added
+  [x] Crowd Monitoring API added
+  [x] Analysis API integrated
+  [x] Analytics API added
+  [x] Result formatting added
+  [x] Aggregated Crowd Monitoring results supported
+  [x] End-to-end integration testing performed
+
+
+PHASE 4 — Reliability & Job Management
+  [x] Service timeout handling
+  [x] Upload validation
+  [x] Video-header validation
+  [x] Job progress tracking
+  [x] Retry improvements
+  [x] Job-health checking
+  [x] Stuck-job detection
+  [x] Job recovery
+  [x] Job lifecycle improvements
+  [x] Expanded automated testing
+
+
+PHASE 5 — Final Integration
+  [x] Job-specific Analysis retrieval
+  [x] Job-specific Analytics retrieval
+  [x] Job-specific Player Tracking retrieval
+  [x] Job-specific Crowd Monitoring retrieval
+  [x] Docker configuration
+  [x] Backend documentation updated
+
 
 DECISIONS LOG
 -------------
-2026-03-24 — Architecture decided: microservices, each team owns one service
-2026-03-24 — Storage: PostgreSQL for data, local uploads/ for video files
-2026-03-24 — Auth: JWT + bcrypt, RBAC with user/admin roles
-2026-03-24 — Error handling: partial results + retry endpoint
-2026-03-24 — Background processing: FastAPI BackgroundTasks
-2026-03-24 — Docker: local dev first, Dockerize in Phase 4 only
-2026-03-24 — Video formats accepted: .mp4, .avi, .mov
-2026-03-24 — Contracts from player/crowd teams: TBC
-2026-03-27 — Mock fallback strategy added: USE_MOCK_SERVICES flag in .env to toggle between mock and real services without code changes
-2026-03-27 — Demo strategy: Mode A (real services) preferred, Mode B (mock fallback) as safety net
-2026-03-27 — Contract push moved to Week 2 (earlier than originally planned) to reduce integration risk
-2026-03-27 — Week 7 designated as buffer week — Docker only if integration is on track
-2026-04-29 — Config split into USE_MOCK_PLAYER + USE_MOCK_CROWD (independent toggles — can run crowd real while player stays mocked)
-2026-04-29 — Database driver upgraded to asyncpg for async SQLAlchemy support
-2026-04-29 — Refresh token support added (REFRESH_TOKEN_EXPIRE_DAYS config var)
-2026-04-29 — Crowd contract confirmed and implemented: POST /process-crowd-detection with JSON body, returns rich result including heatmap path
-2026-04-29 — Heatmap proxy endpoint added: GET /jobs/{job_id}/heatmap fetches image from crowd service and streams to frontend
-2026-04-29 — Player contract still TBC — USE_MOCK_PLAYER=true in .env until player team confirms endpoint
+2026-03-24 — Microservice architecture selected, with each project team
+             responsible for its own service.
+
+2026-03-24 — PostgreSQL selected for backend data and processing-result
+             storage.
+
+2026-03-24 — JWT authentication and role-based access control selected.
+
+2026-03-24 — Background job processing selected for long-running video
+             processing.
+
+2026-03-27 — Mock/fallback processing strategy introduced to allow backend
+             development before ML-service integration was complete.
+
+2026-04-29 — Player and Crowd mock configuration separated so each service
+             could be integrated independently.
+
+2026-04-29 — Crowd Monitoring contract confirmed and real Crowd service
+             integration introduced.
+
+2026-04-29 — Refresh-token support added to authentication.
+
+2026-04-29 — Crowd heatmap retrieval support added.
+
+2026 T2 — Player Tracking integration completed and real Player service
+          responses incorporated into the backend.
+
+2026 T2 — Mock/fallback processing responses replaced as the real Player
+          Tracking and Crowd Monitoring integrations became available.
+
+2026 T2 — Analytics API and backend result-formatting functionality added.
+
+2026 T2 — Player Tracking and Crowd Monitoring APIs updated to provide
+          processing results required by frontend integration.
+
+2026 T2 — Analysis API issue identified and corrected during integration.
+
+2026 T2 — Additional timeout handling, upload validation, progress tracking,
+          retry, recovery and job-health functionality incorporated.
+
+2026 T2 — Analysis, Analytics, Player Tracking and Crowd Monitoring result
+          retrieval updated to use job_id so results correspond to a specific
+          uploaded video.
+
+2026 T2 — Backend documentation updated to reflect the final implementation.
