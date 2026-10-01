@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 from .crowd_analytics_service import process_analytics
 from .crowd_detection_service import process_detection
+from heatmap.main import generate_peak_frame_overlay
 from crowd_allocation_risk_zone.main import assess_risk
 from crowd_behaviour_analytics.main import analyze_behaviour
 from shared.timing import timed as _timed
@@ -229,6 +230,24 @@ def process_crowd_detection(data: dict):
     with _timed("analytics", timings, verbose=False):
         analytics_result = process_analytics(detection_result)
 
+    # Get the frame with the highest person count
+    frames = detection_result.get("frames", [])
+    peak_frame = max(
+        frames,
+        key=lambda frame: frame.get("person_count", 0),
+        default=None,
+    )
+
+    # Create the density overlay using the peak frame detections
+    if peak_frame:
+        heatmap_result = generate_peak_frame_overlay(
+            frame_path=peak_frame.get("people_annotated_frame_path"),
+            people_detections=peak_frame.get("people_detections", []),
+            video_id=data.get("video_id"),
+        )
+    else:
+        heatmap_result = {"heatmap": {}}
+
     intelligence_input = {
         "video_id": data.get("video_id"),
         "zones": analytics_result.get("zones", []),
@@ -246,7 +265,7 @@ def process_crowd_detection(data: dict):
             "summary": _build_summary(detection_result, behaviour_result, risk_result, analytics_result),
             "peak_crowd_frame": _build_peak_crowd_frame(detection_result),
             "anomaly_visual": _build_anomaly_visual(behaviour_result),
-            "heatmap": analytics_result.get("heatmap", {}),
+            "heatmap": heatmap_result.get("heatmap", {}),
             "time_series_chart": _build_time_series_chart(detection_result, behaviour_result, data.get("video_id")),
             "density_extremes": _build_density_extremes(analytics_result, risk_result),
         }

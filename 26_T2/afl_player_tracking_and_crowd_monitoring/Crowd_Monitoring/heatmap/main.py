@@ -5,6 +5,7 @@ import math
 import os
 from typing import Dict, List, Tuple
 
+import cv2
 import matplotlib
 
 matplotlib.use("Agg")
@@ -99,6 +100,109 @@ def compute_grid_shape(num_zones: int) -> Tuple[int, int]:
     cols = max(8, int(math.ceil(math.sqrt(num_zones * 1.6))))
     rows = int(math.ceil(num_zones / cols))
     return rows, cols
+
+
+def generate_peak_frame_overlay(
+    frame_path: str,
+    people_detections: List[Dict],
+    video_id: str,
+    rows: int = 4,
+    cols: int = 4,
+) -> Dict:
+    """Add a density overlay to the peak crowd frame."""
+
+    image = cv2.imread(frame_path)
+
+    if image is None:
+        raise ValueError(f"Could not load frame: {frame_path}")
+
+    height, width = image.shape[:2]
+
+    # Keep track of how many people are in each zone
+    zone_counts = [[0 for _ in range(cols)] for _ in range(rows)]
+
+    for detection in people_detections:
+        bbox = detection.get("bbox")
+
+        if not bbox or len(bbox) != 4:
+            continue
+
+        x1, y1, x2, y2 = bbox
+
+        # Find the centre point of the person
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+
+        # Work out which zone the person is in
+        col = min(int(center_x / width * cols), cols - 1)
+        row = min(int(center_y / height * rows), rows - 1)
+
+        if row >= 0 and col >= 0:
+            zone_counts[row][col] += 1
+
+    # Find the busiest zone so the other zones can be compared to it
+    max_count = max(
+        (count for row_counts in zone_counts for count in row_counts),
+        default=0,
+    )
+
+    overlay = image.copy()
+
+    for row in range(rows):
+        for col in range(cols):
+            x1 = int(col * width / cols)
+            y1 = int(row * height / rows)
+            x2 = int((col + 1) * width / cols)
+            y2 = int((row + 1) * height / rows)
+
+            count = zone_counts[row][col]
+
+            # Leave zones with no detected people unchanged
+            if count == 0:
+                continue
+            density = count / max_count if max_count > 0 else 0
+
+            # Pick a colour based on the density
+            if density < 0.34:
+                colour = (0, 255, 0)
+            elif density < 0.67:
+                colour = (0, 255, 255)
+            else:
+                colour = (0, 0, 255)
+
+            cv2.rectangle(
+                overlay,
+                (x1, y1),
+                (x2, y2),
+                colour,
+                -1,
+            )
+
+    # Make the colours transparent so the crowd is still visible
+    result = cv2.addWeighted(
+        overlay,
+        0.30,
+        image,
+        0.70,
+        0,
+    )
+
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+
+    image_path = os.path.join(
+        output_dir,
+        f"heatmap_overlay_{video_id}.png",
+    )
+
+    cv2.imwrite(image_path, result)
+
+    return {
+        "video_id": video_id,
+        "heatmap": {
+            "image_path": image_path,
+        },
+    }
 
 
 def generate_heatmap(input_data: Dict) -> Dict:
