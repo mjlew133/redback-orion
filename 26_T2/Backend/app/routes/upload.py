@@ -50,6 +50,7 @@ from app.services.crowd_client import (
 from app.services.player_client import (
     get_formation_data,
     get_jersey_color_data,
+    get_path_trajectory_data,
     get_player_data,
     get_tackle_data,
 )
@@ -217,6 +218,7 @@ async def process_video(
             jersey_result,
             formation_result,
             tackle_result,
+            movement_result,
             crowd_result,
         ) = await asyncio.gather(
             get_jersey_color_data(
@@ -228,6 +230,7 @@ async def process_video(
                 tmp_json_path,
             ),
             get_tackle_data(tmp_csv_path),
+            get_path_trajectory_data(file_path),
             get_crowd_data(file_path),
             return_exceptions=True,
         )
@@ -259,6 +262,14 @@ async def process_video(
                 )
                 else tackle_result
             ),
+            "movement": (
+                None
+                if isinstance(
+                    movement_result,
+                    Exception,
+                )
+                else movement_result
+            ),
         }
 
         errors = []
@@ -280,6 +291,12 @@ async def process_video(
             Exception,
         ):
             errors.append("tackle: " f"{tackle_result}")
+
+        if isinstance(
+            movement_result,
+            Exception,
+        ):
+            errors.append("movement: " f"{movement_result}")
 
         if isinstance(
             crowd_result,

@@ -74,6 +74,30 @@ async def get_player_data(
         )
 
 
+async def get_path_trajectory_data(
+    file_path: str,
+):
+    if not file_path or not os.path.exists(file_path):
+        raise PlayerServiceError("A valid video file path is required.")
+
+    with open(
+        file_path,
+        "rb",
+    ) as file:
+
+        return await _post_files(
+            "/path_trajectory",
+            {
+                "video": (
+                    os.path.basename(file_path),
+                    file,
+                    "video/mp4",
+                )
+            },
+            1000.0,
+        )
+
+
 async def get_jersey_color_data(
     video_path: str,
     tracking_json_path: str,
