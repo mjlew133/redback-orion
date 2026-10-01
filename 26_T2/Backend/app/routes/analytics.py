@@ -228,16 +228,18 @@ def get_analysis(
     }
 
 
-@router.get("/analytics/latest")
-def latest_analytics(
+@router.get("/analytics/{job_id}")
+def get_analytics(
+    job_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    job = _latest_job(
+    job = _get_job(
+        job_id,
         db,
         current_user,
     )
-
+    
     if not job:
         raise HTTPException(
             status_code=404,
@@ -247,8 +249,8 @@ def latest_analytics(
     return {
         "job_id": str(job.job_id),
         "status": job.status,
-        "created_at": (job.created_at),
-        "updated_at": (job.updated_at),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
         "player": _player_summary(job.player_result),
         "crowd": _crowd_summary(job.crowd_result),
         "error": job.error,
